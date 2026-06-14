@@ -5,4 +5,6 @@ mod events;
 mod state;
 
 pub use events::{Observation, ObservationSink, SubscriptionInfo};
-pub use state::{AppState, Observer, Subscription, Topic, start};
+pub use state::{
+    AppState, Observer, PUBLISHER_ACTIVE_WINDOW, Publisher, Subscription, Topic, start,
+};

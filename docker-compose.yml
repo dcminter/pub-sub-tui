@@ -1,0 +1,58 @@
+# Demonstrates the headless / UI split.
+#
+#   emulator  ──▶  monitor (proxy :8681 + state server :8682)  ◀──  loadgen
+#                                   ▲
+#                                   └── the pub-sub-tui UI connects here from the HOST
+#
+# The monitor and the traffic generator run inside the stack; the terminal UI is
+# run from your host and connects to the monitor's published state port:
+#
+#   cargo run --bin pub-sub-tui -- --monitor 127.0.0.1:8682
+#
+# Bring the stack up with:  docker compose up --build
+
+services:
+  # The Pub/Sub emulator the monitor proxies in front of. Internal to the stack;
+  # the port is published only so you can poke it directly if you want to.
+  emulator:
+    image: google/cloud-sdk:emulators
+    command: >
+      gcloud beta emulators pubsub start
+      --host-port=0.0.0.0:8085
+      --project=test-project
+    ports:
+      - "8085:8085"
+
+  # The headless monitoring service: interception proxy + admin poller + the
+  # state-streaming gRPC server the UI consumes.
+  monitor:
+    build: .
+    image: pub-sub-tui:local
+    command: >
+      pub-sub-monitor
+      --upstream emulator:8085
+      --listen 0.0.0.0:8681
+      --state-listen 0.0.0.0:8682
+      --project-id test-project
+    environment:
+      - LOG_LEVEL=info
+    ports:
+      - "8681:8681" # proxy — point clients' PUBSUB_EMULATOR_HOST here
+      - "8682:8682" # state stream — the host UI connects here
+    depends_on:
+      - emulator
+
+  # Demo traffic generator: seeds a tree of hierarchically-named topics and drives
+  # publish/consume through the proxy so the monitor has something to show.
+  loadgen:
+    build: .
+    image: pub-sub-tui:local
+    command: >
+      pub-sub-loadgen
+      --endpoint monitor:8681
+      --project-id test-project
+      --interval-ms 800
+    environment:
+      - LOG_LEVEL=info
+    depends_on:
+      - monitor

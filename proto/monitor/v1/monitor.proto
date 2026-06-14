@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+// Wire protocol between the headless monitor service and a remote UI.
+//
+// The monitor observes Pub/Sub traffic and metadata and folds it into an
+// in-memory state. This service streams immutable snapshots of that state to any
+// number of connected UIs. It is intentionally a thin mirror of `observe::AppState`
+// (see `src/monitor/convert.rs` for the mapping).
+package monitor.v1;
+
+// Streams observed Pub/Sub state from the headless monitor to a remote UI.
+service Monitor {
+  // Emits the current snapshot immediately on connect, then a fresh snapshot
+  // every time the observed state changes (and thus at least once per admin-poll
+  // tick). The UI renders each snapshot it receives.
+  rpc StreamState(StreamStateRequest) returns (stream StateSnapshot);
+}
+
+// Empty request: a UI subscribes to the full state and receives everything.
+message StreamStateRequest {}
+
+// A complete, immutable view of the monitored instance at one instant.
+message StateSnapshot {
+  // Keyed by fully-qualified topic name (projects/<p>/topics/<id>).
+  map<string, Topic> topics = 1;
+  // Keyed by fully-qualified subscription name.
+  map<string, Subscription> subscriptions = 2;
+}
+
+message Topic {
+  // Whether the admin poller currently sees this topic.
+  bool exists = 1;
+  // Total messages observed published to this topic.
+  uint64 publish_count = 2;
+  // Per-publisher (peer address) state.
+  map<string, Publisher> publishers = 3;
+}
+
+message Publisher {
+  // Total messages this publisher has published to the topic.
+  uint64 published = 1;
+  // Milliseconds since this publisher was last seen, measured at the instant the
+  // snapshot was sent. The UI reconstructs an `Instant` against its own clock so
+  // the existing recent-activity liveness window keeps working across the wire.
+  uint64 millis_since_last_seen = 2;
+}
+
+message Subscription {
+  // Whether the admin poller currently sees this subscription.
+  bool exists = 1;
+  // Fully-qualified parent topic name, once known from the poller.
+  optional string topic = 2;
+  // Total messages delivered to consumers of this subscription.
+  uint64 delivered = 3;
+  // Total messages acknowledged (consumed) on this subscription.
+  uint64 acked = 4;
+  // Currently-open streaming consumer connections.
+  uint64 live_consumers = 5;
+}

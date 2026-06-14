@@ -198,6 +198,51 @@ mod tests {
     }
 
     #[test]
+    fn topic_tree_nests_by_dotted_name_segments() {
+        let now = Instant::now();
+        let mut state = AppState::default();
+        for topic in [
+            "projects/p/topics/acme.orders.created",
+            "projects/p/topics/acme.orders.shipped",
+            "projects/p/topics/acme.billing.invoiced",
+        ] {
+            state.apply(
+                Observation::Publish {
+                    topic: topic.into(),
+                    peer: "127.0.0.1:5000".parse().ok(),
+                    messages: 2,
+                },
+                now,
+            );
+        }
+
+        let mut app = App::new("h".to_owned());
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| app.render(frame, &state)).unwrap();
+
+        // Collapsed: only the top-level `acme` group is visible; its descendants
+        // (the `orders`/`billing` groups) are hidden until it is expanded.
+        let text = buffer_text(&terminal);
+        assert!(text.contains("acme"), "top-level group missing: {text}");
+        assert!(
+            !text.contains("orders"),
+            "nested group should be hidden while collapsed"
+        );
+
+        // Drill in: select `acme` and expand it.
+        app.handle_event(&key(KeyCode::Down));
+        app.handle_event(&key(KeyCode::Right));
+        terminal.draw(|frame| app.render(frame, &state)).unwrap();
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("orders"), "orders group not revealed: {text}");
+        assert!(
+            text.contains("billing"),
+            "billing group not revealed: {text}"
+        );
+    }
+
+    #[test]
     fn renders_placeholder_when_no_traffic() {
         let mut app = App::new("h".to_owned());
         let state = AppState::default();

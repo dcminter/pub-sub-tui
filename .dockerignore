@@ -1,0 +1,10 @@
+# Keep the build context small: the image builds from source, so only the crate
+# sources, protos and build script are needed.
+target/
+.git/
+*.log
+docs/
+*.md
+docker-compose.yml
+.dockerignore
+.gitignore

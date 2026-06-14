@@ -15,13 +15,26 @@ use google_cloud_gax::conn::Environment;
 use google_cloud_pubsub::client::{Client, ClientConfig};
 use tokio::time::{MissedTickBehavior, interval};
 
-use crate::cli::Cli;
 use crate::observe::{Observation, ObservationSink, SubscriptionInfo};
 
+/// What the admin poller needs to know to run.
+#[derive(Debug, Clone)]
+pub struct PollConfig {
+    /// GCP project id whose topics and subscriptions are enumerated.
+    pub project_id: String,
+    /// The real upstream emulator/instance to poll (never the proxy).
+    pub upstream: String,
+    /// Poll interval, in milliseconds.
+    pub poll_interval_ms: u64,
+}
+
+/// Delay between attempts to (re)connect the metadata client.
+const CONNECT_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 /// Spawn the poller as a background task.
-pub fn spawn(cli: Cli, sink: ObservationSink) {
+pub fn spawn(config: PollConfig, sink: ObservationSink) {
     tokio::spawn(async move {
-        if let Err(err) = run(cli, sink).await {
+        if let Err(err) = run(config, sink).await {
             tracing::error!(%err, "admin poller stopped");
         }
     });
@@ -38,11 +51,25 @@ pub async fn connect(project_id: &str, upstream: &str) -> anyhow::Result<Client>
     Ok(Client::new(config).await?)
 }
 
-async fn run(cli: Cli, sink: ObservationSink) -> anyhow::Result<()> {
-    let client = connect(&cli.project_id, &cli.upstream).await?;
-    tracing::info!(upstream = %cli.upstream, "admin poller connected");
+/// Like [`connect`], but retries indefinitely so the monitor can start before the
+/// upstream emulator is ready (e.g. racing it up in a compose stack).
+async fn connect_with_retry(config: &PollConfig) -> Client {
+    loop {
+        match connect(&config.project_id, &config.upstream).await {
+            Ok(client) => return client,
+            Err(err) => {
+                tracing::warn!(upstream = %config.upstream, %err, "poller connect failed; retrying");
+                tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+            }
+        }
+    }
+}
 
-    let mut ticker = interval(Duration::from_millis(cli.poll_interval_ms));
+async fn run(config: PollConfig, sink: ObservationSink) -> anyhow::Result<()> {
+    let client = connect_with_retry(&config).await;
+    tracing::info!(upstream = %config.upstream, "admin poller connected");
+
+    let mut ticker = interval(Duration::from_millis(config.poll_interval_ms));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     loop {

@@ -1,19 +1,34 @@
 # Architecture
 
-`pub-sub-tui` monitors a Google Pub/Sub instance — typically the local
+The tool monitors a Google Pub/Sub instance — typically the local
 `google/cloud-sdk:emulators` mock — by acting as a **transparent gRPC interception
 proxy** in front of it. The application under test points `PUBSUB_EMULATOR_HOST` at the
-TUI; the TUI forwards every call faithfully to the real server and observes the traffic
-on the way through.
+proxy; the proxy forwards every call faithfully to the real server and observes the
+traffic on the way through.
+
+It is split into a **headless monitor service** and a **terminal UI**, which talk over
+a gRPC stream. The monitor can run wherever the Pub/Sub instance runs (e.g. inside a
+`docker-compose` stack); the UI runs on your own machine and connects in.
 
 ```
-app under test ──gRPC──▶ [ pub-sub-tui proxy ] ──gRPC──▶ Pub/Sub emulator
-                               │ observes (taps)                ▲
-                               │                                │ 1s admin poll
-                               └── observation events ──────────┘ (google-cloud-pubsub)
-                                      │
-                  mpsc ──▶ [ state task (single owner) ] ──▶ watch ──▶ [ ratatui TUI ]
+                       ┌─────────────────────── pub-sub-monitor (headless) ──────────────────────┐
+app under test ──gRPC──▶ [ proxy ] ──gRPC──▶ Pub/Sub emulator                                     │
+                       │     │ observes (taps)        ▲                                           │
+                       │     │                         │ 1s admin poll (google-cloud-pubsub)      │
+                       │     └── observation events ───┘                                          │
+                       │            │                                                             │
+                       │   mpsc ──▶ [ state task (single owner) ] ──▶ watch ──▶ [ state server ] ─┼─┐
+                       └─────────────────────────────────────────────────────────────────────────┘ │
+                                                                                  monitor.v1 gRPC    │ stream
+                                                                                                     ▼
+                       watch ◀── [ state client ] ◀───────────────────────────────── pub-sub-tui ───┘
+                         │                                                            (ratatui, on host)
+                         └──▶ [ ratatui render loop ]
 ```
+
+The split is along the existing `watch`-channel seam: where the UI used to read
+snapshots from an in-process `watch` channel, it now reads them from a local `watch`
+channel fed by the gRPC client. The render loop is unchanged.
 
 ## Why a proxy
 
@@ -60,9 +75,38 @@ exactly as if it had talked to the server directly.
   send cheap `Observation` values down an mpsc channel (never blocking the data path);
   one task folds them into `AppState` and publishes immutable snapshots over a `watch`
   channel. This keeps the hot path lock-free and gives the UI an always-latest view.
+- **`monitor`** (`src/monitor/`) — the network boundary between the headless service and
+  the UI, implementing the `monitor.v1.Monitor` gRPC service:
+  - `server` wraps the observer's `watch` receiver in a `WatchStream` and serves it as a
+    server-streaming RPC, so every connected UI gets the current snapshot immediately
+    and a fresh one on every change. It is a pure fan-out tap and owns no state.
+  - `client` (UI side) dials the monitor, pumps the snapshot stream into a local `watch`
+    channel, and reconnects with backoff if the connection drops — so the UI starts
+    cleanly even before the monitor exists.
+  - `convert` mirrors `AppState` to and from the wire types. Publisher liveness is held
+    in-process as an `Instant`, which is meaningless off-host, so it is sent as
+    *milliseconds since last seen* and rebuilt against the UI's own clock on receipt;
+    the recent-activity window then keeps working with only the sub-second stream
+    latency as skew.
 - **`ui`** (`src/ui/`) — ratatui + crossterm. A dedicated thread reads input events; the
   render loop selects over input, a one-second tick, and state-snapshot changes. The
   terminal is restored on exit and on panic (via the hook installed by `ratatui::init`).
+  The topic tree (`src/ui/tree.rs`) builds a trie from each topic id's dotted segments,
+  so related topics nest under shared group nodes that can be drilled into.
+- **`loadgen`** (`src/loadgen.rs`) — a demo traffic generator. It creates a tree of
+  hierarchically-named topics, attaches subscriptions to most of them, and continuously
+  publishes and (via streaming pulls) consumes — all through the proxy, using the raw
+  generated gRPC clients, so the monitor observes the full range of activity.
+
+## Binaries
+
+All three are thin shells over the library (`src/bin/`):
+
+- **`pub-sub-monitor`** — the headless service: starts the observer, the poller, the
+  proxy and the state server. Logs to stderr.
+- **`pub-sub-tui`** — the UI: streams state from a monitor and renders it. Logs to a
+  file (it owns the terminal).
+- **`pub-sub-loadgen`** — drives `loadgen` against a proxy endpoint. Logs to stderr.
 
 ## Identity and liveness
 

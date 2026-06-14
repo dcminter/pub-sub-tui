@@ -58,6 +58,23 @@ How README claims map to the design:
 - [x] Final `cargo clippy --all-targets -- -D warnings` + `cargo fmt --check` + full test run
 - [x] Real-binary smoke test under a pty (proxy + poller start cleanly, no panics)
 
+## Phase 5 — headless/UI split + demo harness  ✅ DONE
+- [x] New `monitor.v1` gRPC wire protocol (`proto/monitor/v1/monitor.proto`); codegen in `build.rs`
+- [x] `src/monitor/` — state-streaming server (watch → gRPC stream), UI-side client (gRPC →
+      watch, with reconnect), and `AppState`↔wire `convert` (publisher liveness sent as
+      millis-since-last-seen, rebuilt against the UI's clock)
+- [x] Split into three thin binaries (`src/bin/`): `pub-sub-monitor` (headless: proxy + poller +
+      observer + state server), `pub-sub-tui` (UI client), `pub-sub-loadgen` (traffic generator)
+- [x] Per-binary clap CLIs; poller takes a `PollConfig` and retries its initial connect;
+      stderr logging for headless binaries, file logging for the UI
+- [x] Hierarchical topic tree (`src/ui/tree.rs`): topics nest by dotted name segments and drill in
+- [x] `src/loadgen.rs` — creates a tree of hierarchically-named topics, publishers and streaming
+      consumers through the proxy (raw `pb` clients), re-runnable and startup-race tolerant
+- [x] `Dockerfile` + `docker-compose.yml` (emulator + monitor + loadgen); UI runs on the host
+- [x] `tests/monitor.rs` (non-ignored, localhost gRPC round-trip); docs updated (README + all docs)
+- [x] **Verified end-to-end**: `docker compose up` stack observed by the host UI; clippy/fmt/tests
+      green; emulator + proxy integration tests still pass
+
 ## Status: complete
 
 Every README feature and tooling claim is implemented and backed by real data, verified by

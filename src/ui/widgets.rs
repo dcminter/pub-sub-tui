@@ -78,7 +78,7 @@ pub fn empty_placeholder() -> Paragraph<'static> {
     Paragraph::new(vec![
         Line::from(Span::styled("No topics with messages yet.", theme::label())),
         Line::from(Span::styled(
-            "Point your client's PUBSUB_EMULATOR_HOST at this proxy and publish.",
+            "Publish through the monitor's proxy and traffic will appear here.",
             theme::base(),
         )),
     ])

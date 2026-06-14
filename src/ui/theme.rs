@@ -4,7 +4,10 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-const DESKTOP_BG: Color = Color::Blue;
+// The Turbo Vision desktop is the deep VGA navy (palette index 1, #0000AA), not
+// the terminal's bright ANSI blue (#0000FF). Pin the RGB so it looks right
+// regardless of the terminal's 16-colour palette.
+const DESKTOP_BG: Color = Color::Rgb(0x00, 0x00, 0xAA);
 const TEXT: Color = Color::Gray;
 const BRIGHT: Color = Color::White;
 const ACCENT: Color = Color::Yellow;

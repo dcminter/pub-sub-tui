@@ -16,7 +16,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let well_known = protoc_bin_vendored::include_path()?;
     let includes: Vec<PathBuf> = vec![PathBuf::from("proto"), well_known];
 
-    let protos: Vec<PathBuf> = vec![PathBuf::from("proto/google/pubsub/v1/pubsub.proto")];
+    let protos: Vec<PathBuf> = vec![
+        PathBuf::from("proto/google/pubsub/v1/pubsub.proto"),
+        // The monitor↔UI wire protocol (see src/monitor/).
+        PathBuf::from("proto/monitor/v1/monitor.proto"),
+    ];
 
     tonic_prost_build::configure()
         .build_server(true)

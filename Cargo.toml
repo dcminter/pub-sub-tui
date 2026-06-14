@@ -5,6 +5,21 @@ edition = "2024"
 rust-version = "1.95"
 description = "A TUI for monitoring a Google Pub/Sub instance (typically the local emulator) by transparently proxying and observing its gRPC traffic."
 
+# The headless monitor service: interception proxy + poller + state-streaming server.
+[[bin]]
+name = "pub-sub-monitor"
+path = "src/bin/pub-sub-monitor.rs"
+
+# The terminal UI: connects to a (possibly remote) monitor and displays its state.
+[[bin]]
+name = "pub-sub-tui"
+path = "src/bin/pub-sub-tui.rs"
+
+# Traffic generator: drives demo pub/sub traffic through the proxy.
+[[bin]]
+name = "pub-sub-loadgen"
+path = "src/bin/pub-sub-loadgen.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
 tonic = "0.14"
@@ -13,7 +28,9 @@ prost = "0.14"
 prost-types = "0.14"
 bytes = "1"
 futures = "0.3"
-tokio-stream = "0.1"
+# `sync` enables `wrappers::WatchStream`, used by the state-streaming server to
+# turn the observer's `watch` channel into a gRPC response stream.
+tokio-stream = { version = "0.1", features = ["sync"] }
 clap = { version = "4", features = ["derive", "env"] }
 ratatui = "0.30"
 tui-tree-widget = "0.24"
