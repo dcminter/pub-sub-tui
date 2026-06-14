@@ -4,4 +4,4 @@ Rust should be operated with high levels of linting. Most "warnings" should be c
 
 Rust is installed, along with Rustup, Cargo, etc.
 
-
+Docker is installed and should be used when running non-Rust tools (e.g. the pub/sub mock)
