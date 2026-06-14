@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::mpsc;
@@ -129,7 +130,8 @@ proxy_service! {
                         while let Some(frame) = inbound.next().await {
                             let Ok(req) = frame else { break };
                             if !req.subscription.is_empty() {
-                                *subscription.lock().unwrap() = req.subscription.clone();
+                                *subscription.lock().unwrap_or_else(PoisonError::into_inner) =
+                                    req.subscription.clone();
                                 if !opened.swap(true, Ordering::SeqCst) {
                                     sink.observe(Observation::ConsumerOpen {
                                         subscription: req.subscription.clone(),
@@ -138,7 +140,8 @@ proxy_service! {
                                 }
                             }
                             if !req.ack_ids.is_empty() {
-                                let subscription = subscription.lock().unwrap().clone();
+                                let subscription =
+                                    subscription.lock().unwrap_or_else(PoisonError::into_inner).clone();
                                 sink.observe(Observation::Ack {
                                     subscription,
                                     peer,
@@ -175,7 +178,8 @@ proxy_service! {
                                 Ok(resp) => {
                                     let messages = resp.received_messages.len() as u64;
                                     if messages > 0 {
-                                        let subscription = subscription.lock().unwrap().clone();
+                                        let subscription =
+                                    subscription.lock().unwrap_or_else(PoisonError::into_inner).clone();
                                         sink.observe(Observation::Deliver {
                                             subscription,
                                             peer,
@@ -202,7 +206,7 @@ proxy_service! {
                 }
 
                 if opened.load(Ordering::SeqCst) {
-                    let subscription = subscription.lock().unwrap().clone();
+                    let subscription = subscription.lock().unwrap_or_else(PoisonError::into_inner).clone();
                     sink.observe(Observation::ConsumerClose { subscription, peer });
                 }
             });

@@ -62,3 +62,9 @@ warnings = "deny"
 
 [lints.clippy]
 all = "deny"
+# Forbid `.unwrap()` across the codebase: a stray unwrap is a latent panic. This
+# is a `restriction`-group lint (not part of `all`), so it must be opted into
+# explicitly. Test code is exempted via `allow-unwrap-in-tests` in clippy.toml.
+# `expect` is deliberately *not* forbidden — it stays available, with a
+# justifying message, for genuine by-construction invariants.
+unwrap_used = "deny"

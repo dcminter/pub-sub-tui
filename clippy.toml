@@ -1,0 +1,4 @@
+# Allow `.unwrap()`/`.expect()` in tests, where a panic *is* the assertion and
+# propagating errors only adds noise. Production code is held to `unwrap_used =
+# "deny"` (see Cargo.toml [lints.clippy]).
+allow-unwrap-in-tests = true

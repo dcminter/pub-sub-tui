@@ -32,7 +32,13 @@ pub fn init(log_file: &str) -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(filter())
         .with_ansi(false)
-        .with_writer(move || file.try_clone().expect("clone log file handle"))
+        // `make_writer` is called per event and needs an owned handle. A clone
+        // failure (only really fd exhaustion) drops that event to a sink rather
+        // than panicking the TUI mid-render.
+        .with_writer(move || -> Box<dyn std::io::Write> {
+            file.try_clone()
+                .map_or_else(|_| Box::new(std::io::sink()) as Box<dyn std::io::Write>, |f| Box::new(f))
+        })
         .init();
 
     Ok(())
