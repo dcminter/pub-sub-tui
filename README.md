@@ -15,19 +15,6 @@ A third binary, **`pub-sub-loadgen`**, generates demo traffic (a tree of
 hierarchically-named topics, with publishers and consumers) so there is something to
 look at.
 
-```
-                    ┌──────────────── inside the stack ────────────────┐
- your client ──────▶│  pub-sub-monitor                                 │
- (or pub-sub-       │   ├─ proxy  :8681 ──gRPC──▶ Pub/Sub emulator :8085│
-  loadgen)          │   ├─ admin poll ───────────▲                     │
-                    │   └─ state server :8682 ──┐ │                     │
-                    └───────────────────────────┼─┼─────────────────────┘
-                                                 │ │
-                              gRPC state stream  │ │
-                                                 ▼
-                              pub-sub-tui  (runs on your host)
-```
-
 ## Features
 
   * A running count of the number of topics on the current instance

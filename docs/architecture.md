@@ -10,22 +10,6 @@ It is split into a **headless monitor service** and a **terminal UI**, which tal
 a gRPC stream. The monitor can run wherever the Pub/Sub instance runs (e.g. inside a
 `docker-compose` stack); the UI runs on your own machine and connects in.
 
-```
-                       ┌─────────────────────── pub-sub-monitor (headless) ──────────────────────┐
-app under test ──gRPC──▶ [ proxy ] ──gRPC──▶ Pub/Sub emulator                                     │
-                       │     │ observes (taps)        ▲                                           │
-                       │     │                         │ 1s admin poll (google-cloud-pubsub)      │
-                       │     └── observation events ───┘                                          │
-                       │            │                                                             │
-                       │   mpsc ──▶ [ state task (single owner) ] ──▶ watch ──▶ [ state server ] ─┼─┐
-                       └─────────────────────────────────────────────────────────────────────────┘ │
-                                                                                  monitor.v1 gRPC    │ stream
-                                                                                                     ▼
-                       watch ◀── [ state client ] ◀───────────────────────────────── pub-sub-tui ───┘
-                         │                                                            (ratatui, on host)
-                         └──▶ [ ratatui render loop ]
-```
-
 The split is along the existing `watch`-channel seam: where the UI used to read
 snapshots from an in-process `watch` channel, it now reads them from a local `watch`
 channel fed by the gRPC client. The render loop is unchanged.
