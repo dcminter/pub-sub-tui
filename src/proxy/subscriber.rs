@@ -22,6 +22,7 @@ use tonic::{Request, Response, Status};
 use crate::observe::{Observation, ObservationSink};
 use crate::pb;
 use crate::pb::subscriber_client::SubscriberClient;
+use crate::proxy::MAX_MESSAGE_SIZE;
 use crate::proxy::forward::proxy_service;
 
 /// Buffer between the two halves of a proxied `StreamingPull`.
@@ -36,7 +37,9 @@ pub struct ProxySubscriber {
 impl ProxySubscriber {
     pub fn new(channel: Channel, sink: ObservationSink) -> Self {
         Self {
-            upstream: SubscriberClient::new(channel),
+            upstream: SubscriberClient::new(channel)
+                .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                .max_encoding_message_size(MAX_MESSAGE_SIZE),
             sink,
         }
     }
@@ -109,6 +112,11 @@ proxy_service! {
             request: Request<tonic::Streaming<pb::StreamingPullRequest>>,
         ) -> Result<Response<Self::StreamingPullStream>, Status> {
             let peer = request.remote_addr();
+            // Preserve the client's initial-frame metadata across the proxy hop:
+            // `StreamingPull` carries routing (`x-goog-request-params`) and, against
+            // real Pub/Sub, the bearer token there. `into_inner()` would discard it,
+            // and a request built from a bare stream starts with empty metadata.
+            let metadata = request.metadata().clone();
             let mut inbound = request.into_inner();
             let mut upstream_client = self.upstream();
             let sink = self.sink.clone();
@@ -162,8 +170,10 @@ proxy_service! {
                     let sink = sink.clone();
                     let subscription = subscription.clone();
                     async move {
+                        let mut upstream_req = Request::new(ReceiverStream::new(req_rx));
+                        *upstream_req.metadata_mut() = metadata;
                         let upstream = match upstream_client
-                            .streaming_pull(ReceiverStream::new(req_rx))
+                            .streaming_pull(upstream_req)
                             .await
                         {
                             Ok(upstream) => upstream,

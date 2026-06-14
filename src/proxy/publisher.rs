@@ -9,6 +9,7 @@ use tonic::{Request, Response, Status};
 use crate::observe::{Observation, ObservationSink};
 use crate::pb;
 use crate::pb::publisher_client::PublisherClient;
+use crate::proxy::MAX_MESSAGE_SIZE;
 use crate::proxy::forward::proxy_service;
 
 /// Forwards `Publisher` RPCs to the upstream server while observing `Publish`.
@@ -20,7 +21,9 @@ pub struct ProxyPublisher {
 impl ProxyPublisher {
     pub fn new(channel: Channel, sink: ObservationSink) -> Self {
         Self {
-            upstream: PublisherClient::new(channel),
+            upstream: PublisherClient::new(channel)
+                .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                .max_encoding_message_size(MAX_MESSAGE_SIZE),
             sink,
         }
     }

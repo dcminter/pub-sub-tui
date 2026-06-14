@@ -19,6 +19,17 @@ use crate::pb::subscriber_server::SubscriberServer;
 use publisher::ProxyPublisher;
 use subscriber::ProxySubscriber;
 
+/// Per-message gRPC size limit applied to every encoder/decoder in the proxy.
+///
+/// tonic defaults to 4 MiB, but Pub/Sub permits publish requests up to ~10 MB. A
+/// transparent proxy must not be stricter than the upstream it fronts: otherwise a
+/// large (but valid) request the server would accept fails at the proxy instead.
+/// That failed RPC has knock-on effects in clients — an ordered publisher, for
+/// instance, poisons the ordering key and then raises `OrderingKeyError` on every
+/// later message for that key. We set the limit well above Pub/Sub's own cap so the
+/// upstream, not the proxy, is always the one to enforce a ceiling.
+pub(crate) const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+
 /// Serve the proxy until the process exits, forwarding to `upstream`.
 pub async fn serve(
     listen: SocketAddr,
@@ -34,8 +45,16 @@ pub async fn serve(
 
     tracing::info!(%listen, %upstream, "proxy listening");
     Server::builder()
-        .add_service(PublisherServer::new(publisher))
-        .add_service(SubscriberServer::new(subscriber))
+        .add_service(
+            PublisherServer::new(publisher)
+                .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                .max_encoding_message_size(MAX_MESSAGE_SIZE),
+        )
+        .add_service(
+            SubscriberServer::new(subscriber)
+                .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                .max_encoding_message_size(MAX_MESSAGE_SIZE),
+        )
         .serve(listen)
         .await?;
 
