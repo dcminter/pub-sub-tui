@@ -34,6 +34,15 @@ pub struct MonitorCli {
     /// Admin poll interval, in milliseconds.
     #[arg(long, default_value_t = 1000)]
     pub poll_interval_ms: u64,
+
+    /// Number of recently-published messages retained for the UI's message panel.
+    #[arg(long, default_value_t = 200)]
+    pub recent_buffer: usize,
+
+    /// Maximum bytes of each published message captured for the message panel;
+    /// larger payloads are shown truncated.
+    #[arg(long, default_value_t = 64 * 1024)]
+    pub max_payload_bytes: usize,
 }
 
 /// The terminal UI. Connects to a (possibly remote) `pub-sub-monitor` and displays

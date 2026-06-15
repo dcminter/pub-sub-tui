@@ -11,6 +11,7 @@
 //! `crate::pb` stubs the proxy forwards), so it adds no dependencies and exercises
 //! exactly the call shapes the proxy taps.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -168,12 +169,7 @@ async fn publish_loop(
         for (index, topic) in TOPICS.iter().enumerate() {
             // Vary batch size 1..=4 deterministically so per-topic counts diverge.
             let count = 1 + ((round + index as u64) % 4);
-            let messages = (0..count)
-                .map(|n| PubsubMessage {
-                    data: Bytes::from(format!("{topic} #{round}.{n}")),
-                    ..Default::default()
-                })
-                .collect();
+            let messages = (0..count).map(|n| payload_for(topic, round, n)).collect();
 
             let slot = index % publishers.len();
             let client = &mut publishers[slot];
@@ -186,6 +182,39 @@ async fn publish_loop(
             }
         }
         round = round.wrapping_add(1);
+    }
+}
+
+/// Build one demo message for `topic`, choosing a payload shape by topic family so
+/// the UI's content viewer exercises all of its formats: most topics carry JSON,
+/// `logs.audit` carries plain text, and `telemetry.device.error` carries a binary
+/// blob that falls through to the hex view. Each message is tagged with a
+/// `content-type` attribute so the detail header has something to show.
+fn payload_for(topic: &str, round: u64, n: u64) -> PubsubMessage {
+    let (data, content_type) = if topic == "logs.audit" {
+        let line = format!("AUDIT user=svc-{n} action=publish topic={topic} seq={round}.{n}");
+        (Bytes::from(line), "text/plain")
+    } else if topic == "telemetry.device.error" {
+        // Deliberately non-UTF-8: a little-endian code followed by raw bytes.
+        let code = 0xC0DE_u32.wrapping_add(round as u32);
+        let mut bytes = code.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0xFF, 0x00, 0xBE, 0xEF, n as u8, 0x80, 0x7F, 0x01]);
+        (Bytes::from(bytes), "application/octet-stream")
+    } else {
+        let json = format!(
+            r#"{{"topic":"{topic}","round":{round},"index":{n},"amount":{}}}"#,
+            (round + n) * 7 % 1000
+        );
+        (Bytes::from(json), "application/json")
+    };
+
+    let mut attributes = HashMap::new();
+    attributes.insert("content-type".to_owned(), content_type.to_owned());
+    attributes.insert("round".to_owned(), round.to_string());
+    PubsubMessage {
+        data,
+        attributes,
+        ..Default::default()
     }
 }
 

@@ -10,14 +10,32 @@ use std::net::SocketAddr;
 
 use tokio::sync::mpsc;
 
+/// A single message captured from a `Publish` call: its (possibly truncated)
+/// payload and attributes. The proxy caps `data` at the configured payload limit,
+/// recording the original size and whether truncation happened so the UI can say
+/// so.
+#[derive(Debug, Clone)]
+pub struct PublishedMessage {
+    /// The message body, truncated to the proxy's payload cap.
+    pub data: Vec<u8>,
+    /// The message attributes, in the order the client supplied them.
+    pub attributes: Vec<(String, String)>,
+    /// The payload's true length before any truncation.
+    pub original_len: usize,
+    /// Whether `data` was truncated to fit the payload cap.
+    pub truncated: bool,
+}
+
 /// A single thing the proxy or poller observed.
 #[derive(Debug, Clone)]
 pub enum Observation {
-    /// `messages` were published to `topic` by the client at `peer`.
+    /// The `messages` published to `topic` by the client at `peer`. Carries the
+    /// captured payloads, one per published message; `messages.len()` is the
+    /// count that feeds the per-topic/per-publisher totals.
     Publish {
         topic: String,
         peer: Option<SocketAddr>,
-        messages: u64,
+        messages: Vec<PublishedMessage>,
     },
     /// `messages` were delivered to a consumer of `subscription` at `peer`.
     Deliver {

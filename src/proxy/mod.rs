@@ -30,17 +30,20 @@ use subscriber::ProxySubscriber;
 /// upstream, not the proxy, is always the one to enforce a ceiling.
 pub(crate) const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
-/// Serve the proxy until the process exits, forwarding to `upstream`.
+/// Serve the proxy until the process exits, forwarding to `upstream`. `payload_cap`
+/// bounds how many bytes of each published message are captured for the UI's
+/// recent-messages view.
 pub async fn serve(
     listen: SocketAddr,
     upstream: String,
     sink: ObservationSink,
+    payload_cap: usize,
 ) -> anyhow::Result<()> {
     // Lazy connection: the proxy can start before the upstream is reachable and
     // will (re)connect on demand, matching the emulator-first workflow.
     let channel = Channel::from_shared(format!("http://{upstream}"))?.connect_lazy();
 
-    let publisher = ProxyPublisher::new(channel.clone(), sink.clone());
+    let publisher = ProxyPublisher::new(channel.clone(), sink.clone(), payload_cap);
     let subscriber = ProxySubscriber::new(channel, sink);
 
     tracing::info!(%listen, %upstream, "proxy listening");

@@ -34,6 +34,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 clap = { version = "4", features = ["derive", "env"] }
 ratatui = "0.30"
 tui-tree-widget = "0.24"
+# Used by the UI to detect and pretty-print JSON message payloads in the
+# recent-messages content viewer.
+serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1"

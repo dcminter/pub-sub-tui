@@ -18,6 +18,24 @@ pub fn title_bar(header: &str) -> Paragraph<'_> {
     .style(theme::bar())
 }
 
+/// The connection indicator shown at the right of the title bar: a green dot when
+/// the monitor stream is up, a red "connecting…" when it is not. This is the
+/// on-screen signal that an empty view means "not connected", not "no traffic".
+pub fn connection_status(connected: bool) -> Paragraph<'static> {
+    let (glyph, text, style) = if connected {
+        ("\u{25cf} ", "connected", theme::status_ok())
+    } else {
+        ("\u{27f3} ", "connecting\u{2026}", theme::status_warn())
+    };
+    Paragraph::new(Line::from(vec![
+        Span::styled(glyph, style),
+        Span::styled(text, style),
+        Span::styled(" ", theme::bar()),
+    ]))
+    .style(theme::bar())
+    .alignment(Alignment::Right)
+}
+
 /// The "Statistics" side panel: total topics, connected publishers/consumers and
 /// cumulative message totals.
 pub fn statistics(state: &AppState, now: Instant) -> Paragraph<'static> {
@@ -50,23 +68,17 @@ pub fn statistics(state: &AppState, now: Instant) -> Paragraph<'static> {
     )
 }
 
-/// The grey status bar with key hints (Borland-style red hot-keys).
-pub fn status_bar() -> Paragraph<'static> {
-    let hint = |key: &'static str, desc: &'static str| {
-        [
-            Span::styled(format!(" {key} "), theme::hotkey()),
-            Span::styled(format!("{desc} "), theme::bar()),
-        ]
-    };
-    let spans: Vec<Span<'static>> = [
-        hint("\u{2191}\u{2193}", "Move"),
-        hint("\u{2190}\u{2192}", "Collapse/Expand"),
-        hint("Enter", "Toggle"),
-        hint("q", "Quit"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+/// The grey status bar rendering the given key hints (Borland-style red hot-keys).
+pub fn status_bar(hints: &[(&'static str, &'static str)]) -> Paragraph<'static> {
+    let spans: Vec<Span<'static>> = hints
+        .iter()
+        .flat_map(|(key, desc)| {
+            [
+                Span::styled(format!(" {key} "), theme::hotkey()),
+                Span::styled(format!("{desc} "), theme::bar()),
+            ]
+        })
+        .collect();
 
     Paragraph::new(Line::from(spans))
         .style(theme::bar())

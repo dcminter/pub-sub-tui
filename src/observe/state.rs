@@ -6,13 +6,13 @@
 //! cadence. This keeps the hot proxy path lock-free and gives the UI a cheap,
 //! always-latest view.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
 
-use super::events::{Observation, ObservationSink, SubscriptionInfo, peer_key};
+use super::events::{Observation, ObservationSink, PublishedMessage, SubscriptionInfo, peer_key};
 
 /// A publisher is considered "connected" if it has published within this window.
 /// (Pub/Sub `Publish` is a unary call with no long-lived connection, so liveness
@@ -52,11 +52,37 @@ pub struct Subscription {
     pub live_consumers: u64,
 }
 
+/// A single message observed on the wire, retained for the recent-messages view.
+/// Payloads are `Arc`-shared so snapshot clones stay cheap regardless of size.
+#[derive(Debug, Clone)]
+pub struct RecentMessage {
+    /// Monotonic sequence number, assigned in publish order; stable list identity.
+    pub seq: u64,
+    /// Fully-qualified topic the message was published to.
+    pub topic: String,
+    /// The (possibly truncated) message body.
+    pub data: Vec<u8>,
+    /// The message attributes, in the order the publisher supplied them.
+    pub attributes: Vec<(String, String)>,
+    /// The payload's true length before any truncation.
+    pub original_len: usize,
+    /// Whether `data` was truncated to the proxy's payload cap.
+    pub truncated: bool,
+    /// When the message was observed (anchors the displayed age).
+    pub seen: Instant,
+}
+
 /// The complete observable state of the monitored instance.
 #[derive(Debug, Clone, Default)]
 pub struct AppState {
     pub topics: BTreeMap<String, Topic>,
     pub subscriptions: BTreeMap<String, Subscription>,
+    /// Most-recent published messages, oldest first, newest at the back. Bounded
+    /// by the owning task (see [`run`]).
+    pub recent_messages: VecDeque<Arc<RecentMessage>>,
+    /// Sequence number to assign the next observed message. Only meaningful on the
+    /// monitor side, where observations are folded in; the UI leaves it at zero.
+    pub next_seq: u64,
 }
 
 impl AppState {
@@ -68,6 +94,30 @@ impl AppState {
         self.subscriptions.entry(name.to_owned()).or_default()
     }
 
+    /// Append a captured message to the recent-messages buffer, assigning it the
+    /// next sequence number. Trimming to the retention bound is the owner's job
+    /// (see [`run`]), so this stays cap-agnostic and easy to test.
+    fn push_recent(&mut self, topic: &str, message: PublishedMessage, now: Instant) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.recent_messages.push_back(Arc::new(RecentMessage {
+            seq,
+            topic: topic.to_owned(),
+            data: message.data,
+            attributes: message.attributes,
+            original_len: message.original_len,
+            truncated: message.truncated,
+            seen: now,
+        }));
+    }
+
+    /// Drop the oldest messages until at most `cap` remain.
+    fn trim_recent(&mut self, cap: usize) {
+        while self.recent_messages.len() > cap {
+            self.recent_messages.pop_front();
+        }
+    }
+
     /// Fold a single observation into the state. `now` timestamps publisher
     /// activity for the liveness window.
     pub fn apply(&mut self, observation: Observation, now: Instant) {
@@ -77,14 +127,18 @@ impl AppState {
                 peer,
                 messages,
             } => {
-                let topic = self.topic_mut(&topic);
-                topic.publish_count += messages;
-                let publisher = topic.publishers.entry(peer_key(peer)).or_insert(Publisher {
+                let count = messages.len() as u64;
+                let entry = self.topic_mut(&topic);
+                entry.publish_count += count;
+                let publisher = entry.publishers.entry(peer_key(peer)).or_insert(Publisher {
                     published: 0,
                     last_seen: now,
                 });
-                publisher.published += messages;
+                publisher.published += count;
                 publisher.last_seen = now;
+                for message in messages {
+                    self.push_recent(&topic, message, now);
+                }
             }
             Observation::Deliver {
                 subscription,
@@ -178,17 +232,23 @@ pub struct Observer {
 }
 
 /// Spawn the state-owning task and return handles to feed and read it.
-pub fn start() -> Observer {
+/// `recent_buffer` bounds how many recently-published messages are retained for
+/// the UI's recent-messages view.
+pub fn start(recent_buffer: usize) -> Observer {
     let (tx, rx) = mpsc::channel(8192);
     let (snap_tx, snap_rx) = watch::channel(Arc::new(AppState::default()));
-    tokio::spawn(run(rx, snap_tx));
+    tokio::spawn(run(rx, snap_tx, recent_buffer));
     Observer {
         sink: ObservationSink::new(tx),
         snapshots: snap_rx,
     }
 }
 
-async fn run(mut rx: mpsc::Receiver<Observation>, snap_tx: watch::Sender<Arc<AppState>>) {
+async fn run(
+    mut rx: mpsc::Receiver<Observation>,
+    snap_tx: watch::Sender<Arc<AppState>>,
+    recent_buffer: usize,
+) {
     let mut state = AppState::default();
     while let Some(first) = rx.recv().await {
         let now = Instant::now();
@@ -197,6 +257,8 @@ async fn run(mut rx: mpsc::Receiver<Observation>, snap_tx: watch::Sender<Arc<App
         while let Ok(observation) = rx.try_recv() {
             state.apply(observation, now);
         }
+        // Bound the recent-messages buffer once per coalesced burst.
+        state.trim_recent(recent_buffer);
         if snap_tx.send(Arc::new(state.clone())).is_err() {
             break; // all readers gone; nothing left to update
         }
@@ -212,6 +274,21 @@ mod tests {
 
     fn peer(s: &str) -> Option<SocketAddr> {
         Some(s.parse().unwrap())
+    }
+
+    /// `n` empty captured messages, for tests that only care about counts.
+    fn msgs(n: usize) -> Vec<PublishedMessage> {
+        (0..n).map(|_| message(b"")).collect()
+    }
+
+    /// A captured message carrying `data`.
+    fn message(data: &[u8]) -> PublishedMessage {
+        PublishedMessage {
+            data: data.to_vec(),
+            attributes: Vec::new(),
+            original_len: data.len(),
+            truncated: false,
+        }
     }
 
     fn admin(topics: &[&str], subs: &[(&str, &str)]) -> Observation {
@@ -235,7 +312,7 @@ mod tests {
             Observation::Publish {
                 topic: "t1".into(),
                 peer: peer("127.0.0.1:5000"),
-                messages: 3,
+                messages: msgs(3),
             },
             now,
         );
@@ -243,7 +320,7 @@ mod tests {
             Observation::Publish {
                 topic: "t1".into(),
                 peer: peer("127.0.0.1:5000"),
-                messages: 2,
+                messages: msgs(2),
             },
             now,
         );
@@ -251,7 +328,7 @@ mod tests {
             Observation::Publish {
                 topic: "t1".into(),
                 peer: peer("127.0.0.1:6000"),
-                messages: 1,
+                messages: msgs(1),
             },
             now,
         );
@@ -261,6 +338,51 @@ mod tests {
         assert_eq!(topic.publishers["127.0.0.1:5000"].published, 5);
         assert_eq!(topic.publishers["127.0.0.1:6000"].published, 1);
         assert_eq!(state.connected_publishers(now), 2);
+    }
+
+    #[test]
+    fn recent_messages_record_payloads_and_assign_increasing_seq() {
+        let now = Instant::now();
+        let mut state = AppState::default();
+        state.apply(
+            Observation::Publish {
+                topic: "projects/p/topics/orders".into(),
+                peer: peer("127.0.0.1:5000"),
+                messages: vec![message(b"first"), message(b"second")],
+            },
+            now,
+        );
+
+        assert_eq!(state.recent_messages.len(), 2);
+        let seqs: Vec<u64> = state.recent_messages.iter().map(|m| m.seq).collect();
+        assert_eq!(seqs, vec![0, 1]);
+        assert_eq!(state.recent_messages[0].topic, "projects/p/topics/orders");
+        assert_eq!(state.recent_messages[1].data, b"second");
+    }
+
+    #[test]
+    fn trim_recent_keeps_the_newest_within_the_cap() {
+        let now = Instant::now();
+        let mut state = AppState::default();
+        for n in 0..5u8 {
+            state.apply(
+                Observation::Publish {
+                    topic: "t".into(),
+                    peer: peer("127.0.0.1:5000"),
+                    messages: vec![message(&[n])],
+                },
+                now,
+            );
+        }
+        state.trim_recent(3);
+
+        // Oldest two dropped; the three newest (and their seqs) survive in order.
+        let seqs: Vec<u64> = state.recent_messages.iter().map(|m| m.seq).collect();
+        assert_eq!(seqs, vec![2, 3, 4]);
+        assert_eq!(
+            state.recent_messages.front().map(|m| m.data.clone()),
+            Some(vec![2])
+        );
     }
 
     #[test]

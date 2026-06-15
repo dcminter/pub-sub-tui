@@ -8,13 +8,14 @@
 //! decides whether a publisher is "connected" then keeps working unchanged, with
 //! only the (sub-second) stream latency as skew.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::monitor::proto;
-use crate::observe::{AppState, Publisher, Subscription, Topic};
+use crate::observe::{AppState, Publisher, RecentMessage, Subscription, Topic};
 
 /// Encode the current state as a wire snapshot. `now` timestamps the relative
-/// publisher-liveness ages.
+/// publisher-liveness and message ages.
 pub fn to_wire(state: &AppState, now: Instant) -> proto::StateSnapshot {
     let topics = state
         .topics
@@ -28,9 +29,16 @@ pub fn to_wire(state: &AppState, now: Instant) -> proto::StateSnapshot {
         .map(|(name, sub)| (name.clone(), subscription_to_wire(sub)))
         .collect();
 
+    let recent_messages = state
+        .recent_messages
+        .iter()
+        .map(|message| message_to_wire(message, now))
+        .collect();
+
     proto::StateSnapshot {
         topics,
         subscriptions,
+        recent_messages,
     }
 }
 
@@ -48,6 +56,12 @@ pub fn from_wire(snapshot: proto::StateSnapshot, now: Instant) -> AppState {
             .into_iter()
             .map(|(name, sub)| (name, subscription_from_wire(sub)))
             .collect(),
+        recent_messages: snapshot
+            .recent_messages
+            .into_iter()
+            .map(|message| message_from_wire(message, now))
+            .collect(),
+        ..AppState::default()
     }
 }
 
@@ -107,6 +121,45 @@ fn subscription_to_wire(sub: &Subscription) -> proto::Subscription {
         acked: sub.acked,
         live_consumers: sub.live_consumers,
     }
+}
+
+fn message_to_wire(message: &RecentMessage, now: Instant) -> proto::RecentMessage {
+    let age = now.saturating_duration_since(message.seen);
+    proto::RecentMessage {
+        seq: message.seq,
+        topic: message.topic.clone(),
+        data: message.data.clone().into(),
+        attributes: message
+            .attributes
+            .iter()
+            .map(|(key, value)| proto::Attribute {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+        original_len: message.original_len as u64,
+        truncated: message.truncated,
+        millis_since_seen: u64::try_from(age.as_millis()).unwrap_or(u64::MAX),
+    }
+}
+
+fn message_from_wire(message: proto::RecentMessage, now: Instant) -> Arc<RecentMessage> {
+    let seen = now
+        .checked_sub(Duration::from_millis(message.millis_since_seen))
+        .unwrap_or(now);
+    Arc::new(RecentMessage {
+        seq: message.seq,
+        topic: message.topic,
+        data: message.data.to_vec(),
+        attributes: message
+            .attributes
+            .into_iter()
+            .map(|attr| (attr.key, attr.value))
+            .collect(),
+        original_len: message.original_len as usize,
+        truncated: message.truncated,
+        seen,
+    })
 }
 
 fn subscription_from_wire(sub: proto::Subscription) -> Subscription {
@@ -170,6 +223,36 @@ mod tests {
         assert_eq!(sub.delivered, 5);
         assert_eq!(sub.acked, 4);
         assert_eq!(sub.live_consumers, 2);
+    }
+
+    #[test]
+    fn round_trip_preserves_recent_messages() {
+        let now = Instant::now();
+        let mut state = AppState::default();
+        state.recent_messages.push_back(Arc::new(RecentMessage {
+            seq: 7,
+            topic: "projects/p/topics/orders".into(),
+            data: b"{\"id\":1}".to_vec(),
+            attributes: vec![("content-type".into(), "application/json".into())],
+            original_len: 8,
+            truncated: false,
+            seen: now,
+        }));
+
+        let wire = to_wire(&state, now);
+        let restored = from_wire(wire, now + Duration::from_millis(20));
+
+        assert_eq!(restored.recent_messages.len(), 1);
+        let message = &restored.recent_messages[0];
+        assert_eq!(message.seq, 7);
+        assert_eq!(message.topic, "projects/p/topics/orders");
+        assert_eq!(message.data, b"{\"id\":1}");
+        assert_eq!(
+            message.attributes,
+            vec![("content-type".to_owned(), "application/json".to_owned())]
+        );
+        assert_eq!(message.original_len, 8);
+        assert!(!message.truncated);
     }
 
     #[test]

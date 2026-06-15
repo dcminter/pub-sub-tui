@@ -35,6 +35,15 @@ pub fn border() -> Style {
     Style::default().bg(DESKTOP_BG).fg(BRIGHT)
 }
 
+/// The border of the panel that currently holds focus: a bright accent so the
+/// active panel stands out.
+pub fn border_focused() -> Style {
+    Style::default()
+        .bg(DESKTOP_BG)
+        .fg(ACCENT)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// A plain, bright label on the desktop.
 pub fn label() -> Style {
     Style::default().bg(DESKTOP_BG).fg(BRIGHT)
@@ -73,6 +82,22 @@ pub fn bar() -> Style {
 
 /// A red hot-key letter within a bar.
 pub fn hotkey() -> Style {
+    Style::default()
+        .bg(BAR_BG)
+        .fg(HOTKEY)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// A healthy "connected" indicator within a bar (green).
+pub fn status_ok() -> Style {
+    Style::default()
+        .bg(BAR_BG)
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// A "connecting/disconnected" indicator within a bar (red).
+pub fn status_warn() -> Style {
     Style::default()
         .bg(BAR_BG)
         .fg(HOTKEY)

@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     // The single state owner; the poller and the proxy both feed it, and the
     // state server fans its snapshots out to connected UIs.
-    let observer = observe::start();
+    let observer = observe::start(cli.recent_buffer);
     poller::spawn(
         PollConfig {
             project_id: cli.project_id.clone(),
@@ -48,8 +48,9 @@ async fn main() -> anyhow::Result<()> {
     {
         let upstream = cli.upstream.clone();
         let sink = observer.sink.clone();
+        let payload_cap = cli.max_payload_bytes;
         tokio::spawn(async move {
-            if let Err(err) = proxy::serve(proxy_listen, upstream, sink).await {
+            if let Err(err) = proxy::serve(proxy_listen, upstream, sink, payload_cap).await {
                 tracing::error!(%err, "proxy server stopped");
             }
         });

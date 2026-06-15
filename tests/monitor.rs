@@ -9,13 +9,22 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use pub_sub_tui::observe::{AppState, Observation};
+use pub_sub_tui::observe::{AppState, Observation, PublishedMessage};
 use pub_sub_tui::{monitor, observe};
 
 const TOPIC: &str = "projects/p/topics/acme.orders.created";
 
-/// Feed a publish observation of `messages` for [`TOPIC`] into an observer.
+/// Feed a publish observation of `messages` empty payloads for [`TOPIC`] into an
+/// observer.
 fn publish(sink: &observe::ObservationSink, messages: u64) {
+    let messages = (0..messages)
+        .map(|_| PublishedMessage {
+            data: Vec::new(),
+            attributes: Vec::new(),
+            original_len: 0,
+            truncated: false,
+        })
+        .collect();
     sink.observe(Observation::Publish {
         topic: TOPIC.into(),
         peer: "127.0.0.1:5000".parse().ok(),
@@ -54,7 +63,7 @@ async fn streams_observed_state_to_a_remote_client() {
     let listen = "127.0.0.1:18690";
 
     // Headless side: an observer whose snapshots are served over gRPC.
-    let observer = observe::start();
+    let observer = observe::start(200);
     tokio::spawn(monitor::serve(
         listen.parse().unwrap(),
         observer.snapshots.clone(),
@@ -62,7 +71,7 @@ async fn streams_observed_state_to_a_remote_client() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // UI side: stream the state back into a local watch channel.
-    let mut snapshots = monitor::stream(listen.to_owned());
+    let mut snapshots = monitor::stream(listen.to_owned()).snapshots;
 
     // Feed an observation through the headless observer.
     publish(&observer.sink, 3);
@@ -79,14 +88,14 @@ async fn client_connects_when_monitor_starts_late() {
     let listen = "127.0.0.1:18691";
 
     // UI side starts first — there is no monitor to dial yet.
-    let mut snapshots = monitor::stream(listen.to_owned());
+    let mut snapshots = monitor::stream(listen.to_owned()).snapshots;
 
     // Give the supervisor time to attempt (and fail) at least one connection,
     // exercising the retry path rather than a lucky first-try connect.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Now bring the monitor up on the endpoint the client is retrying.
-    let observer = observe::start();
+    let observer = observe::start(200);
     tokio::spawn(monitor::serve(
         listen.parse().unwrap(),
         observer.snapshots.clone(),
@@ -111,7 +120,7 @@ async fn client_reconnects_after_monitor_restarts() {
     let addr: std::net::SocketAddr = listen.parse().unwrap();
 
     // First monitor instance, on a dedicated runtime we can tear down on command.
-    let observer1 = observe::start();
+    let observer1 = observe::start(200);
     let snap1 = observer1.snapshots.clone();
     let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
     let monitor1 = std::thread::spawn(move || {
@@ -129,7 +138,7 @@ async fn client_reconnects_after_monitor_restarts() {
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let mut snapshots = monitor::stream(listen.to_owned());
+    let mut snapshots = monitor::stream(listen.to_owned()).snapshots;
     publish(&observer1.sink, 1);
     assert_eq!(
         wait_for_publish_count(&mut snapshots, 1).await,
@@ -143,7 +152,7 @@ async fn client_reconnects_after_monitor_restarts() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // ...then comes back on the same endpoint with fresh, higher state.
-    let observer2 = observe::start();
+    let observer2 = observe::start(200);
     tokio::spawn(monitor::serve(addr, observer2.snapshots.clone()));
     publish(&observer2.sink, 5);
 

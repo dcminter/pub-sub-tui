@@ -30,6 +30,11 @@ look at.
       * For each, how many messages they have consumed
       * Consumers from a topic with a zero-message consumed count will NOT be shown
   * Basic statistics on how many publishers/consumers in total are connected to the pub/sub instance
+  * A live feed of recently-published messages along the bottom of the screen. `Tab` into
+    it to pause the auto-scroll and cursor through history, then `Enter` to inspect a
+    message — shown as pretty-printed, syntax-highlighted JSON, plain text, or a hex dump
+  * A connection indicator in the title bar shows whether the UI is currently connected to
+    the monitor, so an empty view reads as "not connected" rather than "no traffic"
   * The TUI handles re-sizes of the terminal window automatically
   * The TUI colour scheme apes the old-skool Borland IDE style!
   * The tool only reads metadata - applications running against the same pub/sub instance will be
@@ -133,6 +138,8 @@ pub-sub-monitor [OPTIONS]      # headless: proxy + poller + state server
       --state-listen <HOST:PORT>   Address the state server listens on    [default: 0.0.0.0:8682]
       --project-id <ID>            Project to enumerate                   [default: test-project]
       --poll-interval-ms <MS>      Admin poll interval                    [default: 1000]
+      --recent-buffer <N>          Recent messages kept for the panel     [default: 200]
+      --max-payload-bytes <BYTES>  Per-message bytes captured (truncates)  [default: 65536]
 
 pub-sub-tui [OPTIONS]          # the terminal UI
       --monitor <HOST:PORT>        Monitor state server to connect to     [default: 127.0.0.1:8682]
@@ -145,7 +152,10 @@ pub-sub-loadgen [OPTIONS]      # demo traffic generator
       --duration-secs <S>          Run for S seconds (0 = forever)        [default: 0]
 ```
 
-Keys: `↑`/`↓` move, `←`/`→` collapse/expand, `Enter` toggle, `q` (or `Ctrl-C`) quit.
+Keys: `Tab` switches focus between the topic tree and the messages panel. In the
+tree, `↑`/`↓` move, `←`/`→` collapse/expand and `Enter` toggles. In the messages
+panel, `↑`/`↓` select (pausing the live scroll), `Enter` opens a message and `Esc`
+returns. `q` (or `Ctrl-C`) quits from anywhere.
 The `LOG_LEVEL` environment variable (`TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR`) sets the
 verbosity — written to a file for the UI (which owns the terminal) and to stderr for
 the headless binaries.

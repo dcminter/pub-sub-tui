@@ -4,7 +4,8 @@
 mod events;
 mod state;
 
-pub use events::{Observation, ObservationSink, SubscriptionInfo};
+pub use events::{Observation, ObservationSink, PublishedMessage, SubscriptionInfo};
 pub use state::{
-    AppState, Observer, PUBLISHER_ACTIVE_WINDOW, Publisher, Subscription, Topic, start,
+    AppState, Observer, PUBLISHER_ACTIVE_WINDOW, Publisher, RecentMessage, Subscription, Topic,
+    start,
 };

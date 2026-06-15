@@ -10,6 +10,6 @@ mod convert;
 pub mod proto;
 mod server;
 
-pub use client::stream;
+pub use client::{MonitorStream, stream};
 pub use convert::{from_wire, to_wire};
 pub use server::serve;

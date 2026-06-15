@@ -5,7 +5,8 @@ syntax = "proto3";
 // The monitor observes Pub/Sub traffic and metadata and folds it into an
 // in-memory state. This service streams immutable snapshots of that state to any
 // number of connected UIs. It is intentionally a thin mirror of `observe::AppState`
-// (see `src/monitor/convert.rs` for the mapping).
+// (see `src/monitor/convert.rs` for the mapping), including the bounded buffer of
+// recently-published message bodies that backs the UI's content viewer.
 package monitor.v1;
 
 // Streams observed Pub/Sub state from the headless monitor to a remote UI.
@@ -25,6 +26,36 @@ message StateSnapshot {
   map<string, Topic> topics = 1;
   // Keyed by fully-qualified subscription name.
   map<string, Subscription> subscriptions = 2;
+  // The most recently observed published messages, oldest first. Bounded by the
+  // monitor's retention setting and re-sent in full with each snapshot.
+  repeated RecentMessage recent_messages = 3;
+}
+
+// A single observed published message, retained for the UI's recent-messages view.
+message RecentMessage {
+  // Monotonic sequence number, assigned in publish order (stable list identity).
+  uint64 seq = 1;
+  // Fully-qualified topic the message was published to.
+  string topic = 2;
+  // The (possibly truncated) message body.
+  bytes data = 3;
+  // The message attributes, in the order the publisher supplied them.
+  repeated Attribute attributes = 4;
+  // The payload's true length before any truncation.
+  uint64 original_len = 5;
+  // Whether `data` was truncated to the monitor's payload cap.
+  bool truncated = 6;
+  // Milliseconds since the message was observed, measured when the snapshot was
+  // sent. The UI rebuilds an `Instant` against its own clock, mirroring how
+  // publisher liveness crosses the wire (see Publisher.millis_since_last_seen).
+  uint64 millis_since_seen = 7;
+}
+
+// A message attribute key/value pair. (A repeated pair preserves publisher order,
+// which a proto map would not.)
+message Attribute {
+  string key = 1;
+  string value = 2;
 }
 
 message Topic {

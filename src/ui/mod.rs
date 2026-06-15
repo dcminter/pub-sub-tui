@@ -1,25 +1,25 @@
 //! Terminal user interface: setup/teardown, the input thread and the render loop.
 
 mod app;
+mod message_view;
 mod theme;
 mod tree;
 mod widgets;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
-use crate::observe::AppState;
+use crate::monitor::MonitorStream;
 use app::App;
 
 /// Run the TUI until the user quits. Restores the terminal on the way out
 /// (including on panic, via the hook installed by `ratatui::init`).
-pub async fn run(header: String, snapshots: watch::Receiver<Arc<AppState>>) -> anyhow::Result<()> {
+pub async fn run(header: String, stream: MonitorStream) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run_loop(&mut terminal, header, snapshots).await;
+    let result = run_loop(&mut terminal, header, stream).await;
     ratatui::restore();
     result
 }
@@ -27,8 +27,12 @@ pub async fn run(header: String, snapshots: watch::Receiver<Arc<AppState>>) -> a
 async fn run_loop(
     terminal: &mut DefaultTerminal,
     header: String,
-    mut snapshots: watch::Receiver<Arc<AppState>>,
+    stream: MonitorStream,
 ) -> anyhow::Result<()> {
+    let MonitorStream {
+        mut snapshots,
+        mut connected,
+    } = stream;
     let mut app = App::new(header);
     let mut input = spawn_input_thread();
 
@@ -36,13 +40,14 @@ async fn run_loop(
     // stay current even when no events or data arrive.
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut snapshot = snapshots.borrow().clone();
+    let mut is_connected = *connected.borrow();
 
     loop {
-        terminal.draw(|frame| app.render(frame, &snapshot))?;
+        terminal.draw(|frame| app.render(frame, &snapshot, is_connected))?;
 
         tokio::select! {
             maybe_event = input.recv() => match maybe_event {
-                Some(event) => app.handle_event(&event),
+                Some(event) => app.handle_event(&event, &snapshot),
                 None => break, // input thread ended
             },
             _ = tick.tick() => {}
@@ -51,6 +56,13 @@ async fn run_loop(
                     break; // state task gone
                 }
                 snapshot = snapshots.borrow_and_update().clone();
+            }
+            // The connection-status task lives as long as we hold its receiver, so
+            // a change is the only signal here; an error would mean it is gone.
+            changed = connected.changed() => {
+                if changed.is_ok() {
+                    is_connected = *connected.borrow_and_update();
+                }
             }
         }
 

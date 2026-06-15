@@ -36,8 +36,10 @@ pub fn init(log_file: &str) -> anyhow::Result<()> {
         // failure (only really fd exhaustion) drops that event to a sink rather
         // than panicking the TUI mid-render.
         .with_writer(move || -> Box<dyn std::io::Write> {
-            file.try_clone()
-                .map_or_else(|_| Box::new(std::io::sink()) as Box<dyn std::io::Write>, |f| Box::new(f))
+            file.try_clone().map_or_else(
+                |_| Box::new(std::io::sink()) as Box<dyn std::io::Write>,
+                |f| Box::new(f),
+            )
         })
         .init();
 

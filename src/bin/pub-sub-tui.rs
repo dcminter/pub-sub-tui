@@ -14,12 +14,12 @@ async fn main() -> anyhow::Result<()> {
     logging::init(&cli.log_file)?;
     tracing::info!(monitor = %cli.monitor, "pub-sub-tui starting");
 
-    // Stream state from the monitor into a local watch channel that the render
+    // Stream state from the monitor into local watch channels that the render
     // loop reads exactly as it would an in-process observer.
-    let snapshots = monitor::stream(cli.monitor.clone());
+    let stream = monitor::stream(cli.monitor.clone());
 
     let header = format!("pub-sub-tui   monitor {}", cli.monitor);
-    ui::run(header, snapshots).await?;
+    ui::run(header, stream).await?;
 
     Ok(())
 }

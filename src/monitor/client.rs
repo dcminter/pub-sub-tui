@@ -32,22 +32,41 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Connect to the monitor at `endpoint` (host:port) and stream its state into a
-/// [`watch`] channel. Returns the receiver immediately; the connection is driven
-/// on a background task that reconnects for as long as the receiver lives.
-pub fn stream(endpoint: String) -> watch::Receiver<Arc<AppState>> {
-    let (tx, rx) = watch::channel(Arc::new(AppState::default()));
-    tokio::spawn(supervise(endpoint, tx));
-    rx
+/// The state and connection-status channels a [`stream`] hands back to the UI.
+pub struct MonitorStream {
+    /// Latest observed state (starts empty until the first snapshot arrives).
+    pub snapshots: watch::Receiver<Arc<AppState>>,
+    /// Whether the supervised connection to the monitor is currently up.
+    pub connected: watch::Receiver<bool>,
 }
 
-async fn supervise(endpoint: String, tx: watch::Sender<Arc<AppState>>) {
+/// Connect to the monitor at `endpoint` (host:port) and stream its state into a
+/// [`watch`] channel. Returns immediately; the connection is driven on a background
+/// task that reconnects for as long as the receivers live. The `connected` channel
+/// tracks whether that connection is currently up, so the UI can say so.
+pub fn stream(endpoint: String) -> MonitorStream {
+    let (tx, rx) = watch::channel(Arc::new(AppState::default()));
+    let (status_tx, status_rx) = watch::channel(false);
+    tokio::spawn(supervise(endpoint, tx, status_tx));
+    MonitorStream {
+        snapshots: rx,
+        connected: status_rx,
+    }
+}
+
+async fn supervise(
+    endpoint: String,
+    tx: watch::Sender<Arc<AppState>>,
+    status_tx: watch::Sender<bool>,
+) {
     let url = format!("http://{endpoint}");
     loop {
-        match stream_once(&url, &tx).await {
+        match stream_once(&url, &tx, &status_tx).await {
             Ok(()) => tracing::warn!(%endpoint, "monitor stream ended; reconnecting"),
             Err(err) => tracing::warn!(%endpoint, %err, "monitor connection failed; retrying"),
         }
+        // The connection is down until the next attempt succeeds.
+        let _ = status_tx.send(false);
         // Stop as soon as the UI has dropped its receiver.
         if tx.is_closed() {
             return;
@@ -58,7 +77,11 @@ async fn supervise(endpoint: String, tx: watch::Sender<Arc<AppState>>) {
 
 /// One connection's lifetime: dial, subscribe, and pump snapshots until the
 /// stream ends or errors.
-async fn stream_once(url: &str, tx: &watch::Sender<Arc<AppState>>) -> anyhow::Result<()> {
+async fn stream_once(
+    url: &str,
+    tx: &watch::Sender<Arc<AppState>>,
+    status_tx: &watch::Sender<bool>,
+) -> anyhow::Result<()> {
     // Keepalive pings let us notice a connection that has silently gone away,
     // rather than blocking indefinitely on a stream that will never produce data.
     let channel = Endpoint::from_shared(url.to_owned())?
@@ -68,6 +91,7 @@ async fn stream_once(url: &str, tx: &watch::Sender<Arc<AppState>>) -> anyhow::Re
         .connect()
         .await?;
     let mut client = MonitorClient::new(channel);
+    let _ = status_tx.send(true);
     tracing::info!(%url, "connected to monitor");
 
     let mut stream = client

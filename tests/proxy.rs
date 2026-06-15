@@ -29,8 +29,13 @@ async fn proxy_forwards_and_observes_traffic() {
     let listen: SocketAddr = "127.0.0.1:18681".parse().unwrap();
 
     // Proxy in front of the emulator, feeding a fresh observer.
-    let observer = observe::start();
-    tokio::spawn(proxy::serve(listen, upstream(), observer.sink.clone()));
+    let observer = observe::start(200);
+    tokio::spawn(proxy::serve(
+        listen,
+        upstream(),
+        observer.sink.clone(),
+        64 * 1024,
+    ));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // A client that talks to the PROXY (not the emulator directly).
@@ -123,8 +128,13 @@ async fn proxy_forwards_large_publish() {
     const PAYLOAD: usize = 6 * 1024 * 1024;
     let listen: SocketAddr = "127.0.0.1:18683".parse().unwrap();
 
-    let observer = observe::start();
-    tokio::spawn(proxy::serve(listen, upstream(), observer.sink.clone()));
+    let observer = observe::start(200);
+    tokio::spawn(proxy::serve(
+        listen,
+        upstream(),
+        observer.sink.clone(),
+        64 * 1024,
+    ));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let client = poller::connect("test-project", "127.0.0.1:18683")
@@ -159,8 +169,13 @@ async fn proxy_observes_streaming_pull_consumers() {
 
     let listen: SocketAddr = "127.0.0.1:18682".parse().unwrap();
 
-    let observer = observe::start();
-    tokio::spawn(proxy::serve(listen, upstream(), observer.sink.clone()));
+    let observer = observe::start(200);
+    tokio::spawn(proxy::serve(
+        listen,
+        upstream(),
+        observer.sink.clone(),
+        64 * 1024,
+    ));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Setup + publish through the proxy via the high-level client.
@@ -302,13 +317,21 @@ impl pb::subscriber_server::Subscriber for MetadataCapturingSubscriber {
         // An immediately-empty response stream: dropping the sender when this
         // handler returns closes the channel, ending the stream.
         let (_tx, rx) = tokio::sync::mpsc::channel(1);
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 
-    async fn pull(&self, _: Request<pb::PullRequest>) -> Result<Response<pb::PullResponse>, Status> {
+    async fn pull(
+        &self,
+        _: Request<pb::PullRequest>,
+    ) -> Result<Response<pb::PullResponse>, Status> {
         Err(Status::unimplemented("test stub"))
     }
-    async fn acknowledge(&self, _: Request<pb::AcknowledgeRequest>) -> Result<Response<()>, Status> {
+    async fn acknowledge(
+        &self,
+        _: Request<pb::AcknowledgeRequest>,
+    ) -> Result<Response<()>, Status> {
         Err(Status::unimplemented("test stub"))
     }
     async fn create_subscription(
@@ -421,11 +444,12 @@ async fn proxy_forwards_streaming_pull_metadata() {
     });
 
     // Proxy in front of the echo upstream.
-    let observer = observe::start();
+    let observer = observe::start(200);
     tokio::spawn(proxy::serve(
         proxy_addr,
         upstream_addr.to_string(),
         observer.sink.clone(),
+        64 * 1024,
     ));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
