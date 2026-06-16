@@ -32,7 +32,16 @@ macro_rules! proxy_service {
                     &self,
                     request: tonic::Request<$req>,
                 ) -> std::result::Result<tonic::Response<$resp>, tonic::Status> {
-                    self.$accessor().$method(request).await
+                    let result = self.$accessor().$method(request).await;
+                    if let Err(status) = &result {
+                        tracing::warn!(
+                            rpc = stringify!($method),
+                            code = ?status.code(),
+                            message = status.message(),
+                            "upstream RPC returned error status",
+                        );
+                    }
+                    result
                 }
             )*
         }

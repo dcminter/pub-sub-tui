@@ -79,14 +79,49 @@ proxy_service! {
         ) -> Result<Response<pb::PublishResponse>, Status> {
             let peer = request.remote_addr();
             let topic = request.get_ref().topic.clone();
-            let messages = request
+            let messages: Vec<PublishedMessage> = request
                 .get_ref()
                 .messages
                 .iter()
                 .map(|message| self.capture(message))
                 .collect();
 
-            let response = self.upstream().publish(request).await?;
+            // Distinct ordering keys in this batch: a single rejected publish
+            // poisons its ordering key client-side, so logging the keys alongside
+            // any error status pinpoints which key (if any) was affected.
+            let ordering_keys: std::collections::BTreeSet<String> = request
+                .get_ref()
+                .messages
+                .iter()
+                .map(|message| message.ordering_key.clone())
+                .filter(|key| !key.is_empty())
+                .collect();
+
+            let message_count = messages.len();
+            let response = match self.upstream().publish(request).await {
+                Ok(response) => {
+                    tracing::debug!(
+                        rpc = "publish",
+                        %topic,
+                        messages = message_count,
+                        message_ids = response.get_ref().message_ids.len(),
+                        ordering_keys = ?ordering_keys,
+                        "upstream Publish succeeded",
+                    );
+                    response
+                }
+                Err(status) => {
+                    tracing::warn!(
+                        rpc = "publish",
+                        %topic,
+                        code = ?status.code(),
+                        message = status.message(),
+                        ordering_keys = ?ordering_keys,
+                        "upstream Publish returned error status",
+                    );
+                    return Err(status);
+                }
+            };
 
             self.sink.observe(Observation::Publish {
                 topic,
