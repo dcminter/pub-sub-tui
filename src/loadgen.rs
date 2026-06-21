@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 use crate::cli::LoadgenCli;
@@ -69,15 +70,22 @@ pub async fn run(cli: LoadgenCli) -> anyhow::Result<()> {
     }
 
     // Distinct publisher connections so the UI attributes traffic to more than one
-    // publisher across the topic tree.
+    // publisher across the topic tree. With `--compress`, each gzip-compresses its
+    // request bodies, exercising the proxy's compression support (and matching how a
+    // real Pub/Sub client with compression enabled publishes).
     let mut publishers = Vec::with_capacity(PUBLISHERS);
     for _ in 0..PUBLISHERS {
-        publishers.push(PublisherClient::new(connect(&url).await?));
+        let mut client = PublisherClient::new(connect(&url).await?);
+        if cli.compress {
+            client = client.send_compressed(CompressionEncoding::Gzip);
+        }
+        publishers.push(client);
     }
 
     tracing::info!(
         endpoint = %cli.endpoint,
         topics = TOPICS.len(),
+        compress = cli.compress,
         "load generator running"
     );
 

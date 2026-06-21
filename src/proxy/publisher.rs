@@ -3,6 +3,7 @@
 //! All RPCs are forwarded faithfully to the upstream server. `Publish` is also
 //! tapped to count messages per topic and attribute them to the publishing peer.
 
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
@@ -25,6 +26,7 @@ impl ProxyPublisher {
     pub fn new(channel: Channel, sink: ObservationSink, payload_cap: usize) -> Self {
         Self {
             upstream: PublisherClient::new(channel)
+                .accept_compressed(CompressionEncoding::Gzip)
                 .max_decoding_message_size(MAX_MESSAGE_SIZE)
                 .max_encoding_message_size(MAX_MESSAGE_SIZE),
             sink,

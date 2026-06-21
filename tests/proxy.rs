@@ -502,3 +502,173 @@ async fn proxy_forwards_streaming_pull_metadata() {
         "x-goog-request-params forwarded across the proxy's streaming-pull hop"
     );
 }
+
+// A minimal upstream `Publisher` whose `publish` records the payload of the first
+// message it receives, so we can assert the proxy decoded a gzip-compressed request
+// before forwarding it. Every other RPC is an `unimplemented` stub.
+#[derive(Clone, Default)]
+struct PayloadCapturingPublisher {
+    last_payload: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+}
+
+#[tonic::async_trait]
+impl pb::publisher_server::Publisher for PayloadCapturingPublisher {
+    async fn publish(
+        &self,
+        request: Request<pb::PublishRequest>,
+    ) -> Result<Response<pb::PublishResponse>, Status> {
+        let request = request.into_inner();
+        let payload = request.messages.first().map(|message| message.data.to_vec());
+        *self
+            .last_payload
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = payload;
+        Ok(Response::new(pb::PublishResponse {
+            message_ids: request
+                .messages
+                .iter()
+                .enumerate()
+                .map(|(index, _)| format!("m-{index}"))
+                .collect(),
+        }))
+    }
+
+    async fn create_topic(&self, _: Request<pb::Topic>) -> Result<Response<pb::Topic>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn update_topic(
+        &self,
+        _: Request<pb::UpdateTopicRequest>,
+    ) -> Result<Response<pb::Topic>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn get_topic(
+        &self,
+        _: Request<pb::GetTopicRequest>,
+    ) -> Result<Response<pb::Topic>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn list_topics(
+        &self,
+        _: Request<pb::ListTopicsRequest>,
+    ) -> Result<Response<pb::ListTopicsResponse>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn list_topic_subscriptions(
+        &self,
+        _: Request<pb::ListTopicSubscriptionsRequest>,
+    ) -> Result<Response<pb::ListTopicSubscriptionsResponse>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn list_topic_snapshots(
+        &self,
+        _: Request<pb::ListTopicSnapshotsRequest>,
+    ) -> Result<Response<pb::ListTopicSnapshotsResponse>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn delete_topic(
+        &self,
+        _: Request<pb::DeleteTopicRequest>,
+    ) -> Result<Response<()>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+    async fn detach_subscription(
+        &self,
+        _: Request<pb::DetachSubscriptionRequest>,
+    ) -> Result<Response<pb::DetachSubscriptionResponse>, Status> {
+        Err(Status::unimplemented("test stub"))
+    }
+}
+
+// Pub/Sub clients (e.g. the Ruby gem's async publisher with `compress: true`) gzip
+// their publish request bodies. The proxy's `Publisher` server must accept gzip or the
+// request body never finishes decoding and the publish stalls. The proxy decodes the
+// request to tap it, then forwards it on still gzip-encoded — so the upstream must
+// accept gzip too (real Pub/Sub and the emulator both do; here the in-process upstream
+// is configured to match). Drives a raw client that compresses its requests through the
+// proxy to that upstream — no emulator needed — and asserts the payload arrives intact.
+#[tokio::test]
+async fn proxy_accepts_gzip_compressed_publish() {
+    use pub_sub_tui::pb::publisher_client::PublisherClient;
+    use pub_sub_tui::pb::publisher_server::PublisherServer;
+    use tonic::codec::CompressionEncoding;
+
+    let upstream_addr: SocketAddr = "127.0.0.1:18686".parse().unwrap();
+    let proxy_addr: SocketAddr = "127.0.0.1:18687".parse().unwrap();
+    let topic = "projects/p/topics/t".to_owned();
+
+    // Highly compressible and comfortably larger than the gzip frame's overhead, so
+    // the request really is sent compressed rather than passed through verbatim.
+    let payload = vec![b'z'; 4096];
+
+    // Upstream that records the (decoded) payload the proxy forwards to it.
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let upstream = PayloadCapturingPublisher {
+        last_payload: captured.clone(),
+    };
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(
+                PublisherServer::new(upstream).accept_compressed(CompressionEncoding::Gzip),
+            )
+            .serve(upstream_addr)
+            .await
+            .unwrap();
+    });
+
+    // Proxy in front of the recording upstream.
+    let observer = observe::start(200);
+    tokio::spawn(proxy::serve(
+        proxy_addr,
+        upstream_addr.to_string(),
+        observer.sink.clone(),
+        64 * 1024,
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Raw client → proxy, gzip-compressing its request bodies.
+    let channel = tonic::transport::Channel::from_shared(format!("http://{proxy_addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .expect("raw client connects to proxy");
+    let mut client = PublisherClient::new(channel).send_compressed(CompressionEncoding::Gzip);
+
+    let response = client
+        .publish(pb::PublishRequest {
+            topic: topic.clone(),
+            messages: vec![pb::PubsubMessage {
+                data: payload.clone().into(),
+                ..Default::default()
+            }],
+        })
+        .await
+        .expect("compressed publish forwarded through proxy");
+    assert_eq!(
+        response.into_inner().message_ids.len(),
+        1,
+        "upstream acknowledged the forwarded publish"
+    );
+
+    let got = captured
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        got.as_deref(),
+        Some(payload.as_slice()),
+        "proxy decoded the gzip request and forwarded the original payload"
+    );
+
+    // The proxy also tapped the (decoded) publish on its way through.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let snapshot = observer.snapshots.borrow().clone();
+    let topic_state = snapshot
+        .topics
+        .get(&topic)
+        .expect("topic observed via proxy");
+    assert_eq!(
+        topic_state.publish_count, 1,
+        "observed the decoded compressed publish"
+    );
+}

@@ -82,4 +82,10 @@ pub struct LoadgenCli {
     /// Seconds to run before exiting; `0` runs until interrupted.
     #[arg(long, default_value_t = 0)]
     pub duration_secs: u64,
+
+    /// Gzip-compress publish request bodies, exercising the proxy's compression
+    /// support the way a real Pub/Sub client with compression enabled does. Pass
+    /// `--compress false` to send them uncompressed.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub compress: bool,
 }

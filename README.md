@@ -39,6 +39,10 @@ look at.
   * The TUI colour scheme apes the old-skool Borland IDE style!
   * The tool only reads metadata - applications running against the same pub/sub instance will be
     completely unaffected.
+  * **gzip-compressed requests are handled transparently.** Pub/Sub clients with compression
+    enabled (e.g. the `google-cloud-pubsub` Ruby gem's async publisher with `compress: true`)
+    gzip their publish payloads; the proxy decodes them, forwards faithfully, and observes the
+    traffic just as it does for uncompressed requests.
   * The content of the tool is updated in real-time (to the extent possible) or on a one-second
     tick where polling is required.
   * A `LOG_LEVEL` environment variable is honoured at TRACE, DEBUG, INFO, WARN, and ERROR levels.
@@ -150,6 +154,7 @@ pub-sub-loadgen [OPTIONS]      # demo traffic generator
       --project-id <ID>            Project to create topics under         [default: test-project]
       --interval-ms <MS>           Delay between publish rounds           [default: 800]
       --duration-secs <S>          Run for S seconds (0 = forever)        [default: 0]
+      --compress <BOOL>            Gzip-compress publish requests         [default: true]
 ```
 
 Keys: `Tab` switches focus between the topic tree and the messages panel. In the

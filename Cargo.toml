@@ -22,7 +22,11 @@ path = "src/bin/pub-sub-loadgen.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
-tonic = "0.14"
+# `gzip` enables gRPC message compression support. Pub/Sub clients (e.g. the
+# google-cloud-pubsub Ruby gem's async publisher with `compress: true`) gzip
+# publish payloads above a size threshold; without this feature tonic cannot
+# decode such requests and the (otherwise transparent) proxy silently stalls them.
+tonic = { version = "0.14", features = ["gzip"] }
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"

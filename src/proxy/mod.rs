@@ -11,6 +11,7 @@ mod subscriber;
 
 use std::net::SocketAddr;
 
+use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Server};
 
 use crate::observe::ObservationSink;
@@ -50,11 +51,17 @@ pub async fn serve(
     Server::builder()
         .add_service(
             PublisherServer::new(publisher)
+                // Pub/Sub clients gzip request payloads (e.g. the Ruby gem's
+                // async publisher with `compress: true`); a transparent proxy
+                // must decode them or the request body never finishes decoding
+                // and the handler is never reached — the publish then stalls.
+                .accept_compressed(CompressionEncoding::Gzip)
                 .max_decoding_message_size(MAX_MESSAGE_SIZE)
                 .max_encoding_message_size(MAX_MESSAGE_SIZE),
         )
         .add_service(
             SubscriberServer::new(subscriber)
+                .accept_compressed(CompressionEncoding::Gzip)
                 .max_decoding_message_size(MAX_MESSAGE_SIZE)
                 .max_encoding_message_size(MAX_MESSAGE_SIZE),
         )
