@@ -9,10 +9,19 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use tui_tree_widget::{Tree, TreeState};
+use tui_tree_widget::{Tree, TreeItem, TreeState};
 
 use crate::observe::{AppState, RecentMessage};
 use crate::ui::{message_view, theme, tree, widgets};
+
+/// The messages panel is never squeezed below room for this many message rows.
+const MESSAGES_MIN_ROWS: u16 = 15;
+/// Those rows plus the panel's top and bottom border.
+const MESSAGES_MIN_HEIGHT: u16 = MESSAGES_MIN_ROWS + 2;
+
+/// Minimum height for the body so the statistics panel (six rows plus its border)
+/// is always fully visible, even when the tree has fewer rows than that.
+const BODY_MIN_HEIGHT: u16 = 8;
 
 /// Which panel currently has keyboard focus.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -209,13 +218,22 @@ impl App {
     pub fn render(&mut self, frame: &mut Frame, state: &AppState, connected: bool) {
         let now = Instant::now();
 
+        // The body (tree + stats) is sized to the tree's currently-visible rows so
+        // the messages panel beneath it fills whatever is left over. With few
+        // topics the body stays compact and messages gets plenty of room; as more
+        // topics are expanded the body grows and squeezes the messages panel — but
+        // never below room for `MESSAGES_MIN_ROWS` message rows.
+        let tree_items = tree::build(state);
+        let visible_rows = self.tree_state.flatten(&tree_items).len() as u16;
+        let body_height = Self::body_height(frame.area().height, visible_rows);
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),  // title bar
-                Constraint::Min(3),     // body (tree + stats)
-                Constraint::Length(10), // recent-messages panel
-                Constraint::Length(1),  // status bar
+                Constraint::Length(1),           // title bar
+                Constraint::Length(body_height), // body (tree + stats)
+                Constraint::Min(0),              // recent-messages panel (fills the rest)
+                Constraint::Length(1),           // status bar
             ])
             .split(frame.area());
 
@@ -234,15 +252,35 @@ impl App {
             .constraints([Constraint::Min(40), Constraint::Length(32)])
             .split(chunks[1]);
 
-        self.render_tree(frame, body[0], state);
-        frame.render_widget(widgets::statistics(state, now), body[1]);
+        self.render_tree(frame, body[0], state, &tree_items);
+        frame.render_widget(widgets::statistics(state, now, body[1].width), body[1]);
 
         self.render_messages(frame, chunks[2], state, now);
 
         frame.render_widget(widgets::status_bar(self.hints()), chunks[3]);
     }
 
-    fn render_tree(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
+    /// Height to give the body (tree + stats) for a frame `total` rows tall with
+    /// `visible_rows` tree rows currently showing. The body grows to fit the tree
+    /// but is capped so the messages panel keeps its minimum, and floored so the
+    /// statistics panel is always fully visible.
+    fn body_height(total: u16, visible_rows: u16) -> u16 {
+        // Reserve the single-row title and status bars.
+        let available = total.saturating_sub(2);
+        // The tree's content plus its top/bottom border.
+        let desired = visible_rows.saturating_add(2).max(BODY_MIN_HEIGHT);
+        // Never grow past the point where the messages panel loses its floor.
+        let ceiling = available.saturating_sub(MESSAGES_MIN_HEIGHT).max(BODY_MIN_HEIGHT);
+        desired.min(ceiling)
+    }
+
+    fn render_tree(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &AppState,
+        items: &[TreeItem<'static, String>],
+    ) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(self.border_style(Focus::Tree))
@@ -251,13 +289,12 @@ impl App {
                 theme::title(),
             ));
 
-        let items = tree::build(state);
         if items.is_empty() {
             frame.render_widget(widgets::empty_placeholder().block(block), area);
             return;
         }
 
-        let widget = Tree::new(&items)
+        let widget = Tree::new(items)
             .expect("top-level tree identifiers are unique by construction")
             .block(block)
             .style(theme::base())
@@ -479,7 +516,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent};
 
-    use super::App;
+    use super::{App, BODY_MIN_HEIGHT, MESSAGES_MIN_HEIGHT};
     use crate::observe::{AppState, Observation, PublishedMessage, SubscriptionInfo};
 
     fn key(code: KeyCode) -> Event {
@@ -554,9 +591,57 @@ mod tests {
         assert!(text.contains("orders"), "topic name missing");
         assert!(text.contains("billing"), "consumer subscription missing");
         assert!(text.contains("Statistics"), "stats panel missing");
+        assert!(text.contains("Buffer free"), "buffer headroom stat missing");
         assert!(
             text.contains("Messages (7)"),
             "messages panel missing: {text}"
+        );
+    }
+
+    #[test]
+    fn body_height_floors_messages_panel_and_grows_with_tree() {
+        // A tall frame with a small tree: the body stays compact (its content plus
+        // border, but never below the stats floor) so the messages panel is large.
+        assert_eq!(App::body_height(60, 0), BODY_MIN_HEIGHT);
+        assert_eq!(App::body_height(60, 12), 14); // 12 rows + 2 border
+
+        // As the tree grows the body grows with it — until the messages panel hits
+        // its floor, after which the body is capped so messages keeps its rows.
+        let total = 40;
+        let h = App::body_height(total, 100);
+        assert_eq!(total - 2 - h, MESSAGES_MIN_HEIGHT, "messages floor not held");
+    }
+
+    #[test]
+    fn statistics_values_are_right_justified() {
+        let now = Instant::now();
+        let mut state = AppState {
+            recent_buffer_capacity: 200,
+            ..AppState::default()
+        };
+        state.apply(
+            Observation::Publish {
+                topic: "projects/p/topics/orders".into(),
+                peer: "127.0.0.1:5000".parse().ok(),
+                messages: vec![published(b"hi")],
+            },
+            now,
+        );
+
+        let mut app = App::new("h".to_owned());
+        let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
+        terminal
+            .draw(|frame| app.render(frame, &state, true))
+            .unwrap();
+
+        let text = buffer_text(&terminal);
+        // The buffer headroom reads "199 / 200" (one of 200 used).
+        assert!(text.contains("199 / 200"), "buffer headroom wrong: {text}");
+        // The "Topics" value is padded out to the panel's right edge, so the label
+        // and its value are not adjacent.
+        assert!(
+            !text.contains("Topics: 1") && !text.contains("Topics 1"),
+            "stat value should be right-justified, not adjacent to its label"
         );
     }
 

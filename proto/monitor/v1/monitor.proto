@@ -29,6 +29,9 @@ message StateSnapshot {
   // The most recently observed published messages, oldest first. Bounded by the
   // monitor's retention setting and re-sent in full with each snapshot.
   repeated RecentMessage recent_messages = 3;
+  // The monitor's configured retention bound: the maximum number of recent
+  // messages it will keep. Lets the UI show how much headroom is left.
+  uint64 recent_buffer_capacity = 4;
 }
 
 // A single observed published message, retained for the UI's recent-messages view.

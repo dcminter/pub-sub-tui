@@ -36,29 +36,34 @@ pub fn connection_status(connected: bool) -> Paragraph<'static> {
     .alignment(Alignment::Right)
 }
 
-/// The "Statistics" side panel: total topics, connected publishers/consumers and
-/// cumulative message totals.
-pub fn statistics(state: &AppState, now: Instant) -> Paragraph<'static> {
+/// The "Statistics" side panel: total topics, connected publishers/consumers,
+/// cumulative message totals and the message-buffer headroom. `width` is the
+/// panel's outer width, used to flush the numeric values to the right margin.
+pub fn statistics(state: &AppState, now: Instant, width: u16) -> Paragraph<'static> {
     let total_published: u64 = state.topics.values().map(|t| t.publish_count).sum();
     let total_consumed: u64 = state.subscriptions.values().map(|s| s.acked).sum();
 
-    let rows = [
-        ("Topics", state.topic_count() as u64),
-        ("Publishers (live)", state.connected_publishers(now) as u64),
-        ("Consumers (live)", state.connected_consumers()),
-        ("Messages published", total_published),
-        ("Messages consumed", total_consumed),
-    ];
+    // Inner content width (the block's borders take one column on each side).
+    let inner = width.saturating_sub(2) as usize;
 
-    let lines: Vec<Line<'static>> = rows
-        .into_iter()
-        .map(|(label, value)| {
-            Line::from(vec![
-                Span::styled(format!("{label}: "), theme::label()),
-                Span::styled(value.to_string(), theme::count()),
-            ])
-        })
-        .collect();
+    let mut lines = vec![
+        stat_line("Topics", state.topic_count().to_string(), inner),
+        stat_line(
+            "Publishers (live)",
+            state.connected_publishers(now).to_string(),
+            inner,
+        ),
+        stat_line(
+            "Consumers (live)",
+            state.connected_consumers().to_string(),
+            inner,
+        ),
+        stat_line("Messages published", total_published.to_string(), inner),
+        stat_line("Messages consumed", total_consumed.to_string(), inner),
+        stat_line("Buffer free", buffer_free(state), inner),
+    ];
+    // Guard against a degenerate (zero-width) area producing empty lines.
+    lines.retain(|line| !line.spans.is_empty());
 
     Paragraph::new(lines).style(theme::base()).block(
         Block::default()
@@ -66,6 +71,31 @@ pub fn statistics(state: &AppState, now: Instant) -> Paragraph<'static> {
             .border_style(theme::border())
             .title(Span::styled(" Statistics ", theme::title())),
     )
+}
+
+/// A statistics row: the label flush left, the value flush right against the
+/// panel's inner margin, with the gap between them padded out.
+fn stat_line(label: &str, value: String, inner: usize) -> Line<'static> {
+    // At least one space always separates the label from its value.
+    let used = label.chars().count() + value.chars().count();
+    let gap = inner.saturating_sub(used).max(1);
+    Line::from(vec![
+        Span::styled(label.to_owned(), theme::label()),
+        Span::styled(" ".repeat(gap), theme::base()),
+        Span::styled(value, theme::count()),
+    ])
+}
+
+/// How much headroom remains in the recent-messages buffer, e.g. `153 / 200`
+/// (remaining out of the monitor's configured capacity). Falls back to the raw
+/// count until the capacity is known (before the first real snapshot).
+fn buffer_free(state: &AppState) -> String {
+    let used = state.recent_messages.len();
+    let cap = state.recent_buffer_capacity;
+    if cap == 0 {
+        return used.to_string();
+    }
+    format!("{} / {}", cap.saturating_sub(used), cap)
 }
 
 /// The grey status bar rendering the given key hints (Borland-style red hot-keys).

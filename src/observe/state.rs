@@ -80,6 +80,9 @@ pub struct AppState {
     /// Most-recent published messages, oldest first, newest at the back. Bounded
     /// by the owning task (see [`run`]).
     pub recent_messages: VecDeque<Arc<RecentMessage>>,
+    /// The retention bound applied to `recent_messages` (the most that are ever
+    /// kept). Carried in snapshots so the UI can show the remaining headroom.
+    pub recent_buffer_capacity: usize,
     /// Sequence number to assign the next observed message. Only meaningful on the
     /// monitor side, where observations are folded in; the UI leaves it at zero.
     pub next_seq: u64,
@@ -249,7 +252,10 @@ async fn run(
     snap_tx: watch::Sender<Arc<AppState>>,
     recent_buffer: usize,
 ) {
-    let mut state = AppState::default();
+    let mut state = AppState {
+        recent_buffer_capacity: recent_buffer,
+        ..AppState::default()
+    };
     while let Some(first) = rx.recv().await {
         let now = Instant::now();
         state.apply(first, now);

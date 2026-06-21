@@ -39,6 +39,7 @@ pub fn to_wire(state: &AppState, now: Instant) -> proto::StateSnapshot {
         topics,
         subscriptions,
         recent_messages,
+        recent_buffer_capacity: state.recent_buffer_capacity as u64,
     }
 }
 
@@ -61,6 +62,7 @@ pub fn from_wire(snapshot: proto::StateSnapshot, now: Instant) -> AppState {
             .into_iter()
             .map(|message| message_from_wire(message, now))
             .collect(),
+        recent_buffer_capacity: snapshot.recent_buffer_capacity as usize,
         ..AppState::default()
     }
 }
@@ -228,7 +230,10 @@ mod tests {
     #[test]
     fn round_trip_preserves_recent_messages() {
         let now = Instant::now();
-        let mut state = AppState::default();
+        let mut state = AppState {
+            recent_buffer_capacity: 200,
+            ..AppState::default()
+        };
         state.recent_messages.push_back(Arc::new(RecentMessage {
             seq: 7,
             topic: "projects/p/topics/orders".into(),
@@ -253,6 +258,7 @@ mod tests {
         );
         assert_eq!(message.original_len, 8);
         assert!(!message.truncated);
+        assert_eq!(restored.recent_buffer_capacity, 200);
     }
 
     #[test]
