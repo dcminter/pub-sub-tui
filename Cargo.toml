@@ -1,6 +1,6 @@
 [package]
 name = "pub-sub-tui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A TUI for monitoring a Google Pub/Sub instance (typically the local emulator) by transparently proxying and observing its gRPC traffic."

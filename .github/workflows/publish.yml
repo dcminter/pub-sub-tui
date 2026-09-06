@@ -45,6 +45,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The crate version is the single source of truth for the image version;
+      # `cargo metadata` parses the manifest properly rather than grepping it.
+      - name: Read crate version
+        id: crate
+        run: |
+          version=$(cargo metadata --no-deps --offline --format-version 1 \
+            | jq -r '.packages[] | select(.name == "pub-sub-tui") | .version')
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "could not determine crate version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "crate version: $version"
+
       - name: Derive tags and labels
         id: meta
         uses: docker/metadata-action@v5
@@ -52,9 +66,11 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
+            type=raw,value=${{ steps.crate.outputs.version }}
             type=sha,format=long
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.crate.outputs.version }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
