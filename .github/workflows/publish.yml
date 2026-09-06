@@ -1,0 +1,69 @@
+# Builds the container image and publishes it to the GitHub Container Registry
+# (ghcr.io/dcminter/pub-sub-tui) on every push to main.
+#
+# No repository secrets are involved: the job authenticates to ghcr.io with the
+# ephemeral GITHUB_TOKEN that Actions mints per run, scoped by the `permissions`
+# block below and expired the moment the job ends.
+name: Publish container image
+
+on:
+  push:
+    branches: [main]
+    # Doc-only changes do not alter the image (the .dockerignore already excludes
+    # both from the build context), so skip the build entirely.
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+  # Allows a manual re-publish from the Actions tab without an empty commit.
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # Least privilege: read the source, write the package. Nothing else —
+      # in particular the token cannot push commits, open PRs or read secrets.
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache kept in the repository's Actions cache, so unchanged
+          # dependencies are not recompiled on every push.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
