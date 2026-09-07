@@ -1,7 +1,11 @@
 # Pub-Sub TUI
 
 Monitor a Google Pub/Sub instance (typically the local emulator) by transparently
-proxying and observing its gRPC traffic. The tool is split into two parts:
+proxying and observing its gRPC traffic.
+
+![Screenshot of the TUI](./docs/screenshot.png)
+
+The tool consists of:
 
 - **`pub-sub-monitor`** — a **headless service**: a transparent gRPC interception
   proxy plus an admin poller. It observes traffic and exposes the live state over a
@@ -10,10 +14,15 @@ proxying and observing its gRPC traffic. The tool is split into two parts:
 - **`pub-sub-tui`** — the **terminal UI**: it connects to a (possibly remote)
   `pub-sub-monitor` and displays what it sees. It is meant to be run from *outside*
   the stack, on your own machine.
+- **`pub-sub-loadgen`** - a **load generator**: for testing of this and similar 
+  tools this generates demo traffic (a tree of hierarchically-named topics, with 
+  publishers and consumers) so there is something to look at.
 
-A third binary, **`pub-sub-loadgen`**, generates demo traffic (a tree of
-hierarchically-named topics, with publishers and consumers) so there is something to
-look at.
+There's also the sibling project:
+
+- **[`pub-sub-gui`](https://github.com/dcminter/pub-sub-gui)** - a **web UI**: just
+  like `pub-sub-tui` it connects to the (possibly remote) `pub-sub-monitor` and displays 
+  what it sees.
 
 ## Features
 
@@ -22,39 +31,29 @@ look at.
   * Topic names form a **drill-down hierarchy**: a dotted name like
     `acme.orders.created` nests under `acme ▸ orders ▸ created`, so related topics
     can be collapsed and expanded as a tree
-  * Notes in the tree-view also note
-    * Which publishers exist on the topic
-      * For each, how many messages they have published
-      * Publishers to a topic with a zero-message published count will NOT be shown
-    * Which consumers exist on the topic
-      * For each, how many messages they have consumed
-      * Consumers from a topic with a zero-message consumed count will NOT be shown
-  * Basic statistics on how many publishers/consumers in total are connected to the pub/sub instance
-  * A live feed of recently-published messages along the bottom of the screen. `Tab` into
-    it to pause the auto-scroll and cursor through history, then `Enter` to inspect a
-    message — shown as pretty-printed, syntax-highlighted JSON, plain text, or a hex dump
-  * A connection indicator in the title bar shows whether the UI is currently connected to
-    the monitor, so an empty view reads as "not connected" rather than "no traffic"
-  * The TUI handles re-sizes of the terminal window automatically
-  * The TUI colour scheme apes the old-skool Borland IDE style!
+  * Metadata on publishers and consumers
+  * A live feed of recently-published messages
+    * Pretty-printed, syntax-highlighted JSON
+    * Plain text
+    * hex dump
+  * Old-skool Borland IDE colour palette!
   * The tool only reads metadata - applications running against the same pub/sub instance will be
     completely unaffected.
-  * **gzip-compressed requests are handled transparently.** Pub/Sub clients with compression
-    enabled (e.g. the `google-cloud-pubsub` Ruby gem's async publisher with `compress: true`)
-    gzip their publish payloads; the proxy decodes them, forwards faithfully, and observes the
-    traffic just as it does for uncompressed requests.
-  * The content of the tool is updated in real-time (to the extent possible) or on a one-second
-    tick where polling is required.
-  * A `LOG_LEVEL` environment variable is honoured at TRACE, DEBUG, INFO, WARN, and ERROR levels.
+  * Pub/Sub clients with compression enabled gzip their publish payloads; the proxy handles these transparently
+  * Real-time or polling updates
+
+## AI Declaration
+
+This tool is pretty much pure vibe-coded with Claude Code to scratch my own itch!
 
 ## Tooling
 
-  * The pub/sub mock to be used is `google/cloud-sdk:emulators` (a Docker image)
+  * The pub/sub mock used is `google/cloud-sdk:emulators` (a Docker image)
   * The ratatui crate (along with crossterm) is used for UI rendering
   * The clap crate is used for command-line rendering
     * Declarative mode is used for the Clap tool - all clap config is therefore in the Rust source
   * The google-cloud-pubsub crate is used for pub/sub metadata access
-  * The monitor↔UI boundary is a `tonic` gRPC service (`proto/monitor/v1/monitor.proto`)
+  * The monitor/UI boundary is a `tonic` gRPC service (`proto/monitor/v1/monitor.proto`)
 
 ## How it works
 
@@ -64,6 +63,8 @@ as a transparent gRPC interception proxy. The application points
 real server (so the application is unaffected) while observing the traffic in
 passing. Live traffic gives real publisher, consumer and message-count information; a
 one-second admin poll enumerates topics and subscriptions.
+
+![Illustration of interception](./docs/interception.png)
 
 The monitor folds everything it sees into an in-memory state and streams immutable
 snapshots of it over the `monitor.v1.Monitor` gRPC service. One or more `pub-sub-tui`
