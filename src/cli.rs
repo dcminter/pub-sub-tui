@@ -4,8 +4,8 @@
 
 use clap::Parser;
 
-/// The headless monitor service: a transparent gRPC interception proxy in front
-/// of a Pub/Sub instance, plus an admin poller, exposing the observed state over
+/// The headless monitor service: a transparent interception proxy in front of a
+/// Pub/Sub instance — speaking both gRPC and REST/JSON — plus an admin poller, exposing the observed state over
 /// the network for a remote UI to display.
 ///
 /// Point the client-under-test's `PUBSUB_EMULATOR_HOST` at `--listen`; the proxy

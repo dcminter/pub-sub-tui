@@ -1,5 +1,6 @@
 //! `pub-sub-tui` — monitor a Google Pub/Sub instance by acting as a transparent
-//! gRPC interception proxy in front of the (typically emulated) server.
+//! interception proxy — gRPC and REST/JSON — in front of the (typically emulated)
+//! server.
 //!
 //! The work is split across three thin binaries (under `src/bin/`) that are all
 //! shells over these modules:

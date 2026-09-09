@@ -98,3 +98,11 @@ impl ObservationSink {
 pub fn peer_key(peer: Option<SocketAddr>) -> String {
     peer.map_or_else(|| "unknown".to_owned(), |addr| addr.to_string())
 }
+
+/// A sink whose observations land in the returned receiver: lets a test build a
+/// producer (a proxy, say) without spinning up the state-owning task.
+#[cfg(test)]
+pub fn test_sink() -> (ObservationSink, mpsc::Receiver<Observation>) {
+    let (tx, rx) = mpsc::channel(64);
+    (ObservationSink::new(tx), rx)
+}

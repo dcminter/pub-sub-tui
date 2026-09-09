@@ -518,7 +518,10 @@ impl pb::publisher_server::Publisher for PayloadCapturingPublisher {
         request: Request<pb::PublishRequest>,
     ) -> Result<Response<pb::PublishResponse>, Status> {
         let request = request.into_inner();
-        let payload = request.messages.first().map(|message| message.data.to_vec());
+        let payload = request
+            .messages
+            .first()
+            .map(|message| message.data.to_vec());
         *self
             .last_payload
             .lock()
@@ -671,4 +674,158 @@ async fn proxy_accepts_gzip_compressed_publish() {
         topic_state.publish_count, 1,
         "observed the decoded compressed publish"
     );
+}
+
+// The REST/JSON half of the proxy. Pub/Sub serves the same API over HTTP/1.1 JSON
+// as it does over gRPC, and clients pick either — so a client that speaks REST must
+// be able to reach the emulator through the proxy, and its traffic must be counted
+// the same way. This drives the whole cycle (create, publish, pull, acknowledge)
+// with a plain HTTP client, exactly as `curl` or a REST client library would.
+#[tokio::test]
+#[ignore = "requires a running Pub/Sub emulator"]
+async fn proxy_forwards_and_observes_rest_traffic() {
+    const PROJECT: &str = "test-project";
+    let listen: SocketAddr = "127.0.0.1:18684".parse().unwrap();
+    let topic = format!("projects/{PROJECT}/topics/pst-rest-topic");
+    let subscription = format!("projects/{PROJECT}/subscriptions/pst-rest-sub");
+
+    let observer = observe::start(200);
+    tokio::spawn(proxy::serve(
+        listen,
+        upstream(),
+        observer.sink.clone(),
+        64 * 1024,
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Setup. Re-running the test finds these already present, which is fine.
+    let (status, _) = rest(listen, "PUT", &format!("/v1/{topic}"), "{}").await;
+    assert!(
+        status.is_success() || status == http::StatusCode::CONFLICT,
+        "REST topic create through proxy: {status}"
+    );
+    let (status, _) = rest(
+        listen,
+        "PUT",
+        &format!("/v1/{subscription}"),
+        &format!(r#"{{"topic":"{topic}"}}"#),
+    )
+    .await;
+    assert!(
+        status.is_success() || status == http::StatusCode::CONFLICT,
+        "REST subscription create through proxy: {status}"
+    );
+
+    // Publish two messages: "hello rest" and "second", base64 as REST requires.
+    let (status, body) = rest(
+        listen,
+        "POST",
+        &format!("/v1/{topic}:publish"),
+        r#"{"messages":[
+               {"data":"aGVsbG8gcmVzdA==","attributes":{"src":"test"}},
+               {"data":"c2Vjb25k"}
+           ]}"#,
+    )
+    .await;
+    assert!(status.is_success(), "REST publish through proxy: {status}");
+    assert!(
+        body.contains("messageIds"),
+        "the upstream's publish response came back intact: {body}"
+    );
+
+    // Pull and acknowledge everything the subscription holds.
+    let mut ack_ids: Vec<String> = Vec::new();
+    for _ in 0..20 {
+        let (status, body) = rest(
+            listen,
+            "POST",
+            &format!("/v1/{subscription}:pull"),
+            r#"{"maxMessages":10}"#,
+        )
+        .await;
+        assert!(status.is_success(), "REST pull through proxy: {status}");
+        let json: serde_json::Value = serde_json::from_str(&body).expect("pull response is JSON");
+        ack_ids.extend(
+            json["receivedMessages"]
+                .as_array()
+                .unwrap_or(&Vec::new())
+                .iter()
+                .filter_map(|m| m["ackId"].as_str().map(ToOwned::to_owned)),
+        );
+        if ack_ids.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ack_ids.len() >= 2, "both messages delivered over REST");
+
+    let (status, _) = rest(
+        listen,
+        "POST",
+        &format!("/v1/{subscription}:acknowledge"),
+        &serde_json::json!({ "ackIds": ack_ids }).to_string(),
+    )
+    .await;
+    assert!(status.is_success(), "REST acknowledge through proxy");
+
+    // Everything above went through the proxy, so all of it was observed.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let snapshot = observer.snapshots.borrow().clone();
+
+    let topic_state = snapshot.topics.get(&topic).expect("REST topic observed");
+    assert_eq!(topic_state.publish_count, 2, "observed REST publish count");
+    assert!(
+        !topic_state.publishers.is_empty(),
+        "a REST publisher peer was recorded"
+    );
+
+    let sub_state = snapshot
+        .subscriptions
+        .get(&subscription)
+        .expect("REST subscription observed");
+    assert!(sub_state.delivered >= 2, "observed REST deliveries");
+    assert!(sub_state.acked >= 2, "observed REST acks");
+
+    // The payloads reached the recent-messages view, base64-decoded.
+    let payloads: Vec<Vec<u8>> = snapshot
+        .recent_messages
+        .iter()
+        .filter(|message| message.topic == topic)
+        .map(|message| message.data.clone())
+        .collect();
+    assert!(
+        payloads.iter().any(|data| data == b"hello rest"),
+        "the decoded REST payload reached the message view: {payloads:?}"
+    );
+}
+
+// An HTTP/1.1 request to the proxy, returning the response status and body — a
+// REST client in miniature, so the test needs no HTTP client dependency.
+async fn rest(
+    listen: SocketAddr,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> (http::StatusCode, String) {
+    use http_body_util::{BodyExt as _, Full};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+
+    let client: Client<_, Full<bytes::Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let request = http::Request::builder()
+        .method(method)
+        .uri(format!("http://{listen}{path}"))
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(bytes::Bytes::from(body.to_owned())))
+        .expect("build a REST request");
+
+    let response = client.request(request).await.expect("REST call to proxy");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect the REST response body")
+        .to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
 }

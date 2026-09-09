@@ -58,7 +58,8 @@ PUBSUB_TEST_UPSTREAM=localhost:8085 cargo test --test emulator --test proxy -- -
 
 - `tests/emulator.rs` — the admin poller lists a seeded topic + subscription.
 - `tests/proxy.rs` — traffic driven *through* the proxy is forwarded and observed
-  (publish/pull/ack, plus a raw-client `StreamingPull` exercising consumer open/close).
+  (publish/pull/ack, plus a raw-client `StreamingPull` exercising consumer open/close,
+  and the same cycle again over the REST/JSON API).
 - `tests/monitor.rs` — state served by the monitor is streamed back to the UI client.
 
 ## Module layout
@@ -79,7 +80,8 @@ src/
   observe/               Observation events + single-owner state task (mpsc → watch)
   monitor/               monitor.v1 gRPC: server, client, AppState↔wire convert, proto
   poller.rs              1s admin poll via google-cloud-pubsub (targets upstream directly)
-  proxy/                 tonic services: forward.rs (macro), publisher.rs, subscriber.rs
+  proxy/                 tonic services: forward.rs (macro), publisher.rs, subscriber.rs,
+                         rest.rs (the REST/JSON relay on the same port)
   loadgen.rs             traffic generator (raw pb gRPC clients through the proxy)
   ui/                    theme, hierarchical tree, statistics widgets, app view-model, loop
 ```

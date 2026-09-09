@@ -1,7 +1,7 @@
 //! `pub-sub-monitor` — the headless monitoring service.
 //!
-//! Runs the transparent gRPC interception proxy, the admin poller and the single
-//! state owner, and exposes the observed state over the `monitor.v1` gRPC service
+//! Runs the transparent interception proxy (gRPC and REST/JSON), the admin poller
+//! and the single state owner, and exposes the observed state over the `monitor.v1` gRPC service
 //! for one or more remote `pub-sub-tui` UIs to display. Designed to run inside a
 //! container (e.g. a docker-compose stack); it owns no terminal and logs to
 //! stderr. See `docs/architecture.md` for the design.

@@ -1,14 +1,14 @@
 # Pub-Sub TUI
 
 Monitor a Google Pub/Sub instance (typically the local emulator) by transparently
-proxying and observing its gRPC traffic.
+proxying and observing its traffic — gRPC and REST/JSON alike.
 
 ![Screenshot of the TUI](./docs/screenshot.png)
 
 The tool consists of:
 
-- **`pub-sub-monitor`** — a **headless service**: a transparent gRPC interception
-  proxy plus an admin poller. It observes traffic and exposes the live state over a
+- **`pub-sub-monitor`** — a **headless service**: a transparent interception proxy
+  (gRPC and REST/JSON on one port) plus an admin poller. It observes traffic and exposes the live state over a
   small gRPC API. It runs anywhere your Pub/Sub instance runs — for example inside a
   `docker-compose` stack.
 - **`pub-sub-tui`** — the **terminal UI**: it connects to a (possibly remote)
@@ -40,6 +40,9 @@ There's also the sibling project:
   * The tool only reads metadata - applications running against the same pub/sub instance will be
     completely unaffected.
   * Pub/Sub clients with compression enabled gzip their publish payloads; the proxy handles these transparently
+  * Both of Pub/Sub's protocols are proxied on the same port: gRPC **and** the REST/JSON
+    API (`POST /v1/…/topics/t:publish`), so clients that speak REST rather than gRPC
+    connect through the monitor and are observed just the same
   * Real-time or polling updates
 
 ## AI Declaration
@@ -58,11 +61,14 @@ This tool is pretty much pure vibe-coded with Claude Code to scratch my own itch
 ## How it works
 
 `pub-sub-monitor` sits **between** the application under test and the Pub/Sub server
-as a transparent gRPC interception proxy. The application points
+as a transparent interception proxy. The application points
 `PUBSUB_EMULATOR_HOST` at the monitor, which forwards every call faithfully to the
 real server (so the application is unaffected) while observing the traffic in
-passing. Live traffic gives real publisher, consumer and message-count information; a
-one-second admin poll enumerates topics and subscriptions.
+passing. Pub/Sub offers the same API over two protocols — gRPC over HTTP/2 and REST/JSON
+over HTTP/1.1 — and the proxy speaks both on the one port, so it does not matter which
+one the application's client library chose. Live traffic gives real publisher, consumer
+and message-count information; a one-second admin poll enumerates topics and
+subscriptions.
 
 ![Illustration of interception](./docs/interception.png)
 

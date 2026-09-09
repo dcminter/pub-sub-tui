@@ -1,9 +1,9 @@
 [package]
 name = "pub-sub-tui"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.95"
-description = "A TUI for monitoring a Google Pub/Sub instance (typically the local emulator) by transparently proxying and observing its gRPC traffic."
+description = "A TUI for monitoring a Google Pub/Sub instance (typically the local emulator) by transparently proxying and observing its gRPC and REST traffic."
 
 # The headless monitor service: interception proxy + poller + state-streaming server.
 [[bin]]
@@ -32,6 +32,22 @@ prost = "0.14"
 prost-types = "0.14"
 bytes = "1"
 futures = "0.3"
+# The proxy serves Pub/Sub's REST/JSON API alongside gRPC on the same port, so it
+# needs an HTTP/1.1 stack of its own: `axum` (the router tonic itself routes with,
+# for the non-gRPC fallback), `hyper`/`hyper-util` for the client leg upstream and
+# `http`/`http-body-util` for the message plumbing in between. All four are already
+# in the tree as tonic's own dependencies; the versions here track its.
+axum = { version = "0.8", default-features = false }
+http = "1.1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+# Decodes the `data` field of a REST message, which proto3's JSON mapping carries
+# as base64, for the recent-messages view.
+base64 = "0.22"
+# Decodes gzipped REST bodies for observation (the compressed body itself is
+# relayed untouched); the gRPC side gets the equivalent from tonic's `gzip`.
+flate2 = "1"
 # `sync` enables `wrappers::WatchStream`, used by the state-streaming server to
 # turn the observer's `watch` channel into a gRPC response stream.
 tokio-stream = { version = "0.1", features = ["sync"] }

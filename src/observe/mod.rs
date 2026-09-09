@@ -4,6 +4,8 @@
 mod events;
 mod state;
 
+#[cfg(test)]
+pub use events::test_sink;
 pub use events::{Observation, ObservationSink, PublishedMessage, SubscriptionInfo};
 pub use state::{
     AppState, Observer, PUBLISHER_ACTIVE_WINDOW, Publisher, RecentMessage, Subscription, Topic,

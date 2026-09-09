@@ -2110,15 +2110,22 @@ checksum = "95067976aca6421a523e491fce939a3e65249bac4b977adee0ee9771568e8aa3"
 
 [[package]]
 name = "pub-sub-tui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "base64",
  "bytes",
  "clap",
+ "flate2",
  "futures",
  "gcloud-gax",
  "gcloud-googleapis",
  "gcloud-pubsub",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "prost",
  "prost-types",
  "protoc-bin-vendored",
